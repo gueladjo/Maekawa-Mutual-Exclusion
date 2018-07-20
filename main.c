@@ -29,6 +29,12 @@ typedef struct Quorum_Member {
     int send_socket;
 } Quorum_Member;
 
+typedef struct CS_Time
+{
+    int start_time;
+    int end_time;
+} CS_Time;
+
 
 
 void* handle_quorum_member(void* arg);
@@ -37,22 +43,17 @@ int handle_message(char* message, size_t length);
 
 char * create_vector_msg(int * vector_clk);
 int * parse_vector(char * char_vector);
-void send_marker_messages(int snapshot_id) ;
 
 void send_msg(int sockfd, char * buffer, int msglen);
 int receive_message(char * message, int length);
-int compare_timestamps(int * incoming_ts);
-int merge_timestamps(int * incoming_ts);
 
 int message_source(char * msg);
 int message_dst(char * msg);
 char message_type(char * msg);
 char * message_payload(char * msg);
-
-void record_snapshot();
-void snapshot_channel(char* message);
-void activate_node();
-void* snapshot_handler();
+void app();
+void cs-enter();
+void cs-leave();
 void output();
 
 // Global parameters
@@ -61,11 +62,16 @@ int inter_request_delay;
 int cs_execution_time;
 int num_requests;
 
+//Timing Variables
+int prev_ms;
+
 config system_config; 
 
 // Node Paramters
 int node_id;
 int port;
+int request_num;
+CS_Time* execution_times;
 
 Quorum_Member* quorum;
 int quorum_size;
@@ -79,7 +85,7 @@ int main(int argc, char* argv[])
     read_config_file(&system_config, argv[2]);
     display_config(system_config); 
 
-   /* nb_nodes = system_config.nodes_in_system;
+    nb_nodes = system_config.nodes_in_system;
     inter_request_delay = system_config.inter_request_delay;
     cs_execution_time = system_config.cs_execution_time;
     num_requests = system_config.num_requests;
@@ -91,7 +97,9 @@ int main(int argc, char* argv[])
 
     // Set up quorum information and initialize vector timestamp
     quorum =  malloc(quorum_size * sizeof(Quorum_Member));
-    
+
+    // List of all start and end times of critical sections for this node
+    execution_times = malloc(num_requests * sizeof(CS_Time));
 
     // allocate quorum array
     for (i = 0; i < quorum_size; i++)
@@ -196,13 +204,105 @@ int main(int argc, char* argv[])
         }
         pthread_create(&tid, &attr, handle_quorum_member, &(quorum[i].receive_socket));
         i++;
-    }*/
+    }
+    app();
 }
 
 void* handle_quorum_member(void * arg)
 {
     
 }
+
+void app()
+{
+    while(1)
+    {
+        if (can_request() && request_num < num_requests)
+        {
+            cs-enter()
+        }
+    }
+}
+
+void cs-enter()
+{
+    // Request mutex service
+    // Assuming granted...
+
+    int ms, new_ms;
+    int sec, new_sec;
+    long nsec, new_nsec;
+    struct timespec ts;
+    int time_elapsed = 0; //ms
+
+    clock_gettime(CLOCK_REALTIME, &ts);
+    ts.tv_sec = sec;
+    ts.tv_nsec = nsec;
+    ms = sec * 1000 + nsec / 1000000;
+
+    execution_times[request_num].start_time = ms;
+
+    while (time_elapsed < cs_execution_time)
+    {   
+
+
+        clock_gettime(CLOCK_REALTIME, &ts);
+        ts.tv_sec = new_sec;
+        ts.tv_nsec = new_nsec;
+        new_ms = new_sec * 1000 + new_nsec / 1000000;
+
+        time_elapsed += (new_ms - ms);
+        ms = new_ms;
+    }
+    cs-leave();
+
+}
+
+void cs-leave()
+{
+    // Send notification to mutex service...
+    // Does order matter? Should this be after recording time?
+
+
+
+
+
+    int sec;
+    long nsec;
+    struct timespec ts;
+
+    clock_gettime(CLOCK_REALTIME, &ts);
+
+    sec = ts.tv_sec;
+    nsec = ts.tv_nsec;
+    prev_ms = current_sec * 1000 + current_nsec / 1000000 
+    execution_times[request_num].end_time = prev_ms;
+    request_num++;
+}  
+
+int can_request()
+{
+    int current_sec;
+    long current_nsec;
+    int current_ms;
+    struct timespec ts;
+
+    clock_gettime(CLOCK_REALTIME, &ts);
+
+    current_sec = ts.tv_sec;
+    current_nsec = ts.tv_nsec;
+    current_ms = current_sec * 1000 + current_nsec / 1000000
+
+
+    if (current_ms - prev_ms > inter_request_delay)
+    {
+        prev_ms = current_ms;
+        return true;
+    }
+    else
+        return false;
+}
+
 
 // Function to send whole message
 void send_msg(int sockfd, char * buffer, int msglen)
