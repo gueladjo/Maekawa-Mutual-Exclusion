@@ -228,8 +228,6 @@ void cs-enter()
 {
     // Request mutex service
     // Assuming granted...
-
-    int ms, new_ms;
     int sec, new_sec;
     long nsec, new_nsec;
     struct timespec ts;
@@ -238,14 +236,12 @@ void cs-enter()
     clock_gettime(CLOCK_REALTIME, &ts);
     ts.tv_sec = sec;
     ts.tv_nsec = nsec;
-    ms = sec * 1000 + nsec / 1000000;
+    prev_ms = sec * 1000 + nsec / 1000000;
 
-    execution_times[request_num].start_time = ms;
+    execution_times[request_num].start_time = prev_ms;
 
     while (time_elapsed < cs_execution_time)
     {   
-
-
         clock_gettime(CLOCK_REALTIME, &ts);
         ts.tv_sec = new_sec;
         ts.tv_nsec = new_nsec;
@@ -269,14 +265,15 @@ void cs-leave()
 
     int sec;
     long nsec;
+    int ms;
     struct timespec ts;
 
     clock_gettime(CLOCK_REALTIME, &ts);
 
     sec = ts.tv_sec;
     nsec = ts.tv_nsec;
-    prev_ms = current_sec * 1000 + current_nsec / 1000000 
-    execution_times[request_num].end_time = prev_ms;
+    ms = current_sec * 1000 + current_nsec / 1000000 
+    execution_times[request_num].end_time = ms;
     request_num++;
 }  
 
@@ -296,7 +293,6 @@ int can_request()
 
     if (current_ms - prev_ms > inter_request_delay)
     {
-        prev_ms = current_ms;
         return true;
     }
     else
@@ -339,4 +335,16 @@ char message_type(char * msg)
 char * message_payload(char * msg)
 {
     return msg+5;
+}
+
+void output()
+{
+    char fileName[15];
+    snprintf(fileName, 15, "node%doutput", node_id);
+    FILE * fp = fopen(fileName, "w");
+    int i;
+    for (i = 0; i < request_num; i++)
+    {
+        fprintf("%d %d\n", execution_times[request_num].start_time, execution_times[request_num].end_time);
+    }
 }
