@@ -23,9 +23,9 @@ typedef struct Quorum_Member {
 } Quorum_Member;
 
 
-enum Request {False = 0, True = 1};
-
-enum Request enter_request = False;
+// Semaphore
+sem_t enter_request;
+sem_t request_grant;
 
 void* mutual_exclusion_handler(); 
 void maekawa_protocol_release();
@@ -193,36 +193,44 @@ int main(int argc, char* argv[])
     clock_gettime(CLOCK_REALTIME, &previous_time);
     uint64_t delta_ms;
 
+    struct timespec ts;
+    ts.tv_sec = cs_execution_time / 1000;
+    ts.tv_nsec = (cs_execution_time % 1000) * 1000000;
+
     // Application loop
-    while (1)
+    int request_generated = 0;
+    while (request_generated < num_requests)
     {
         clock_gettime(CLOCK_REALTIME, &current_time);
         delta_ms = (current_time.tv_sec - previous_time.tv_sec) * 1000 +
             (current_time.tv_nsec - previous_time.tv_nsec) / 1000000;
-        if (delta_ms > inter_request_delay )
+
+        if (delta_ms > inter_request_delay)
         {
+            request_generated++;
             cs_enter();
-            wait(cs_execution_time)
+            nanosleep(cs_execution_time);
             cs_leave();
             previous_time.tv_sec = current_time.tv_sec;
             previous_time.tv_nsec = current_time.tv_nsec;
         }
-}
+    }
     exit(0);
-
 }
 
 void cs_enter() 
 {
-    // Request CS enter by setting variable to True
-    enter_request = True;
+    // Request CS enter by signaling semaphore
+    if (sem_post(&enter_request) == -1) {
+        printf("Error during signal on mutex.\n");
+        exit(1);
+    } 
 
     // Wait on mutual exclusion module to grant request
     if (sem_wait(&request_grant) == -1) {
         printf("Error during wait on mutex.\n");
         exit(1);
     }
-    enter_request = False;
 }
 
 void cs_leave()
@@ -237,20 +245,28 @@ void cs_leave()
 void* mutual_exclusion_handler()
 {
     while (1) {
-        if (enter_request == True) {
-            maekawa_protocol_request();
-        
-            // Signal to application it can execute CS
-            if (sem_post(&request_grant) == -1) {
-                printf("Error during signal on mutex.\n");
-                exit(1);
-            } 
 
-            // TODO: wait until application is done with CS
+        // Wait for CS request from application
+        if (sem_wait(&enter_request) == -1) {
+            printf("Error during wait on mutex.\n");
+            exit(1);
+        }
 
-            maekawa_protocol_release();
-        }    
-    }
+        maekawa_protocol_request();
+    
+        // Signal to application it can execute CS
+        if (sem_post(&request_grant) == -1) {
+            printf("Error during signal on mutex.\n");
+            exit(1);
+        } 
+
+        // Wait for application to finish executing CS
+        if (sem_wait(&request_grant) == -1) {
+            printf("Error during wait on mutex.\n");
+            exit(1);
+        }
+        maekawa_protocol_release();
+    }    
 } 
 
 void maekawa_protocol_release()
@@ -263,7 +279,6 @@ void maekawa_protocol_request()
 
 void* handle_quorum_member(void * arg)
 {
-    
 }
 
 // Function to send whole message
