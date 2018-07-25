@@ -13,6 +13,12 @@
 #include "config.h"
 
 #define BUFFERSIZE 512
+#define REQUEST 'R'
+#define RELEASE 'L'
+#define GRANT 'G'
+#define FAILED 'F'
+#define INQUIRE 'I'
+#define YIELD 'Y'
 
 typedef struct Quorum_Member {
     int id;
@@ -22,10 +28,17 @@ typedef struct Quorum_Member {
     int send_socket;
 } Quorum_Member;
 
-
 // Semaphore
 sem_t enter_request;
 sem_t request_grant;
+sem_t execution_end;
+sem_t wait_grant;
+
+// Lamport clock
+int timestamp = 0;
+
+void cs_enter();
+void cs_leave();
 
 void* mutual_exclusion_handler(); 
 void maekawa_protocol_release();
@@ -46,7 +59,7 @@ int merge_timestamps(int * incoming_ts);
 int message_source(char * msg);
 int message_dst(char * msg);
 char message_type(char * msg);
-char * message_payload(char * msg);
+int message_ts(char * msg);
 
 // Global parameters
 int nb_nodes;
@@ -72,7 +85,7 @@ int main(int argc, char* argv[])
     read_config_file(&system_config, argv[2]);
     display_config(system_config); 
 
-   /* nb_nodes = system_config.nodes_in_system;
+    nb_nodes = system_config.nodes_in_system;
     inter_request_delay = system_config.inter_request_delay;
     cs_execution_time = system_config.cs_execution_time;
     num_requests = system_config.num_requests;
@@ -92,6 +105,27 @@ int main(int argc, char* argv[])
         quorum[i].id = system_config.quorum[node_id][i];
         quorum[i].port = system_config.portNumbers[quorum[i].id];
         memmove(quorum[i].hostname, system_config.hostNames[quorum[i].id], 18);
+    }
+
+    // Initialize mutex
+    if (sem_init(&enter_request, 0, 0) == -1) {
+        printf("Error during mutex init.\n");
+        exit(1);
+    }
+
+    if (sem_init(&request_grant, 0, 0) == -1) {
+        printf("Error during mutex init.\n");
+        exit(1);
+    }
+
+    if (sem_init(&wait_grant, 0, 0) == -1) {
+        printf("Error during mutex init.\n");
+        exit(1);
+    }
+    
+    if (sem_init(&execution_end, 0, 0) == -1) {
+        printf("Error during mutex init.\n");
+        exit(1);
     }
 
     // Client sockets information
@@ -183,7 +217,7 @@ int main(int argc, char* argv[])
         }
         pthread_create(&tid, &attr, handle_quorum_member, &(quorum[i].receive_socket));
         i++;
-    }*/
+    }
 
     // Create mutual exclusion service thread
     pthread_t pid;
@@ -193,9 +227,9 @@ int main(int argc, char* argv[])
     clock_gettime(CLOCK_REALTIME, &previous_time);
     uint64_t delta_ms;
 
-    struct timespec ts;
-    ts.tv_sec = cs_execution_time / 1000;
-    ts.tv_nsec = (cs_execution_time % 1000) * 1000000;
+    struct timespec cs_time;
+    cs_time.tv_sec = cs_execution_time / 1000;
+    cs_time.tv_nsec = (cs_execution_time % 1000) * 1000000;
 
     // Application loop
     int request_generated = 0;
@@ -209,7 +243,7 @@ int main(int argc, char* argv[])
         {
             request_generated++;
             cs_enter();
-            nanosleep(cs_execution_time);
+            nanosleep(&cs_time, NULL);
             cs_leave();
             previous_time.tv_sec = current_time.tv_sec;
             previous_time.tv_nsec = current_time.tv_nsec;
@@ -236,7 +270,7 @@ void cs_enter()
 void cs_leave()
 {
     // Signal that application is done executing critical section
-    if (sem_post(&request_grant) == -1) {
+    if (sem_post(&execution_end) == -1) {
         printf("Error during signal on mutex.\n");
         exit(1);
     } 
@@ -245,7 +279,6 @@ void cs_leave()
 void* mutual_exclusion_handler()
 {
     while (1) {
-
         // Wait for CS request from application
         if (sem_wait(&enter_request) == -1) {
             printf("Error during wait on mutex.\n");
@@ -261,7 +294,7 @@ void* mutual_exclusion_handler()
         } 
 
         // Wait for application to finish executing CS
-        if (sem_wait(&request_grant) == -1) {
+        if (sem_wait(&execution_end) == -1) {
             printf("Error during wait on mutex.\n");
             exit(1);
         }
@@ -271,10 +304,36 @@ void* mutual_exclusion_handler()
 
 void maekawa_protocol_release()
 {
+    int i;
+    char msg[50];
+
+    // Send release message to all quorum members
+    timestamp++;
+    for (i = 0; i < quorum_size; i++)
+    {
+        snprintf(msg, 9, "%02d%02dL%03d", node_id, quorum[i].id, timestamp);
+        send_msg(quorum[i].send_socket, msg, 8);
+    }
 }
 
 void maekawa_protocol_request()
 {
+    int i;
+    char msg[50];
+
+    // Send request message to all quorum members
+    timestamp++;
+    for (i = 0; i < quorum_size; i++)
+    {
+        snprintf(msg, 9, "%02d%02dR%03d", node_id, quorum[i].id, timestamp);
+        send_msg(quorum[i].send_socket, msg, 8);
+    }
+
+    // Wait until all GRANT messages are received
+    if (sem_wait(&wait_grant) == -1) {
+        printf("Error during signal on mutex.\n");
+        exit(1);
+    } 
 }
 
 void* handle_quorum_member(void * arg)
@@ -313,7 +372,9 @@ char message_type(char * msg)
     return msg[4];
 }
 
-char * message_payload(char * msg)
+int message_ts(char *msg)
 {
-    return msg+5;
+    int ts; 
+    sscanf(msg+5, "%3d", &ts);
+    return ts;
 }
