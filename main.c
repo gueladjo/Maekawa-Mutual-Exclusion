@@ -253,6 +253,87 @@ int main(int argc, char* argv[])
     exit(0);
 }
 
+void* handle_quorum_member(void * arg)
+{
+    // Initialize buffer and size variable
+    int count = 0;
+    size_t rcv_len = 0;
+    char buffer[BUFFERSIZE];
+
+    int s = *((int*) arg);
+
+    while (1) {
+        if (((count = recv(s, buffer + rcv_len, BUFFERSIZE - rcv_len, 0)) == -1)) {
+            printf("Error during socket read.\n");
+            close(s);
+            exit(1); 
+        }
+        else if (count > 0) {
+            rcv_len = rcv_len + count;
+            parse_buffer(buffer, &rcv_len);
+        }
+    }
+}
+
+//Src dst prot timestamp->
+//|##|##|Char|###| (Pipes not included in actual messages)
+void parse_buffer(char* buffer, size_t* rcv_len)
+{
+    // Check if we have enough byte to read message length
+    int message_len = 3;
+    while (*rcv_len > 4 ) {
+        // Check if we received a whole message
+
+        if (*rcv_len < 5 + message_len) 
+           break; 
+
+        // Handle message received
+        handle_message(buffer, message_len + 5);
+
+        // Remove message from buffer and shuffle bytes of next message to start of the buffer
+        *rcv_len = *rcv_len - 5 - message_len;
+        if (*rcv_len != 0) {
+            memmove(buffer, buffer + 5 + message_len, *rcv_len);
+        }
+    }
+}
+
+// Check type of message (application or marker) and process it
+// Source | Dest | Protocol | Length | Payload
+int handle_message(char* message, size_t length)
+{
+    char temp[300];
+    strcpy(temp, message);
+    temp[length] = '\0';
+    printf("MSG RCVD: %s LENGTH: %d\n", temp, (int) length);
+
+    if (message_type(message) == GRANT)
+    {
+    }
+
+    if (message_type(message) == REQUEST)
+    {
+    }
+
+    if (message_type(message) == RELEASE)
+    {
+    }
+
+    if (message_type(message) == FAILED)
+    {
+    }
+
+    if (message_type(message) == INQUIRE)
+    {
+    }
+
+    if (message_type(message) == FAILED)
+    {
+    }
+
+    return 0;
+}
+
 void cs_enter() 
 {
     // Request CS enter by signaling semaphore
@@ -335,10 +416,6 @@ void maekawa_protocol_request()
         printf("Error during signal on mutex.\n");
         exit(1);
     } 
-}
-
-void* handle_quorum_member(void * arg)
-{
 }
 
 // Function to send whole message
