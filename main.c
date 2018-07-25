@@ -10,6 +10,7 @@
 #include<netdb.h>
 #include<pthread.h>
 #include<semaphore.h>
+#include<math.h>
 #include "config.h"
 
 #define BUFFERSIZE 512
@@ -44,16 +45,14 @@ void* mutual_exclusion_handler();
 void maekawa_protocol_release();
 void maekawa_protocol_request();
 
+int exponential_rand(int mean);
+
 void* handle_quorum_member(void* arg);
 void parse_buffer(char* buffer, size_t* rcv_len);
 int handle_message(char* message, size_t length);
 
-char * create_vector_msg(int * vector_clk);
-int * parse_vector(char * char_vector);
-
 void send_msg(int sockfd, char * buffer, int msglen);
 int receive_message(char * message, int length);
-int compare_timestamps(int * incoming_ts);
 int merge_timestamps(int * incoming_ts);
 
 int message_source(char * msg);
@@ -95,7 +94,7 @@ int main(int argc, char* argv[])
     quorum_size = system_config.quorumSize[node_id];
     port = system_config.portNumbers[node_id];
 
-    // Set up quorum information and initialize vector timestamp
+    // Set up quorum information
     quorum =  malloc(quorum_size * sizeof(Quorum_Member));
     
 
@@ -227,28 +226,30 @@ int main(int argc, char* argv[])
     clock_gettime(CLOCK_REALTIME, &previous_time);
     uint64_t delta_ms;
 
-    struct timespec cs_time;
-    cs_time.tv_sec = cs_execution_time / 1000;
-    cs_time.tv_nsec = (cs_execution_time % 1000) * 1000000;
+    struct timespec random_cs_time;
+    int random_delay = exponential_rand(inter_request_delay);
+    int random_exec_time = exponential_rand(cs_execution_time);
+
+    random_cs_time.tv_sec = random_exec_time / 1000;
+    random_cs_time.tv_nsec = (random_exec_time % 1000) * 1000000;
 
     // Application loop
     int request_generated = 0;
-    while (request_generated < num_requests)
-    {
+    while (request_generated < num_requests) {
         clock_gettime(CLOCK_REALTIME, &current_time);
         delta_ms = (current_time.tv_sec - previous_time.tv_sec) * 1000 +
             (current_time.tv_nsec - previous_time.tv_nsec) / 1000000;
 
-        if (delta_ms > inter_request_delay)
-        {
+        if (delta_ms > random_delay) {
             request_generated++;
             cs_enter();
-            nanosleep(&cs_time, NULL);
+            nanosleep(&random_cs_time, NULL);
             cs_leave();
             previous_time.tv_sec = current_time.tv_sec;
             previous_time.tv_nsec = current_time.tv_nsec;
         }
     }
+
     exit(0);
 }
 
@@ -377,4 +378,15 @@ int message_ts(char *msg)
     int ts; 
     sscanf(msg+5, "%3d", &ts);
     return ts;
+}
+
+int exponential_rand(int mean)
+{
+    double random_exp = rand() / (RAND_MAX + 1.0);
+    random_exp = -log(1 - random_exp) * (double) mean;
+
+    int ret;
+    ret = random_exp;
+
+    return ret;
 }
