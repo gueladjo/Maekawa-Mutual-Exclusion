@@ -1,2 +1,2 @@
 make: main.c
-	gcc -g -pthread main.c config.c -o node
+	gcc -g -pthread main.c config.c -o node -lm
