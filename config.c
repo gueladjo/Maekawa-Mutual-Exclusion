@@ -8,7 +8,6 @@ int* read_config_file(config * system, char* fileName)
     system->config_name = fileName;
     FILE * fp = fopen(fileName, "r");
 
-    printf(fileName);
     int tokensRead = 0;
     int tokensInLine = 4; // First valid line has 6 tokens
     int linesRead = 0;
