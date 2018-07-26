@@ -327,7 +327,7 @@ int handle_message(char* message, size_t length)
     {
     }
 
-    if (message_type(message) == FAILED)
+    if (message_type(message) == YIELD)
     {
     }
 
