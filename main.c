@@ -24,8 +24,9 @@
 typedef struct Quorum_Member {
     int id;
     int port;
+    int lock_held;
     char hostname[100];
-    int receive_socket; // I'm not sure if this is the right terminology to call this the 'server' socket, but it's the new socket created from the accept() call
+    int receive_socket;
     int send_socket;
 } Quorum_Member;
 
@@ -74,6 +75,8 @@ int port;
 
 Quorum_Member* quorum;
 int quorum_size;
+int lock_holder;
+int lock_received = 0;
 
 int main(int argc, char* argv[])
 {
@@ -309,6 +312,16 @@ int handle_message(char* message, size_t length)
 
     if (message_type(message) == GRANT)
     {
+        lock_received++;
+
+        if (lock_received == quorum_size) {
+            // Signal CS can be executed
+            if (sem_post(&wait_grant) == -1) {
+                printf("Error during signal on mutex.\n");
+                exit(1);
+            }
+
+        }
     }
 
     if (message_type(message) == REQUEST)
@@ -403,6 +416,7 @@ void maekawa_protocol_request()
     int i;
     char msg[50];
 
+    lock_received = 0;
     // Send request message to all quorum members
     timestamp++;
     for (i = 0; i < quorum_size; i++)
