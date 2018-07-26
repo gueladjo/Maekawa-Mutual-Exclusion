@@ -36,6 +36,15 @@ typedef struct CS_Time
     int end_time;
 } CS_Time;
 
+// Semaphore
+sem_t enter_request;
+sem_t request_grant;
+sem_t execution_end;
+sem_t wait_grant;
+
+// Lamport clock
+int timestamp = 0;
+
 
 int exponential_rand(int mean);
 
@@ -52,10 +61,14 @@ int message_dst(char * msg);
 char message_type(char * msg);
 char * message_payload(char * msg);
 void app();
-void cs-enter();
-void cs-leave();
+void cs_enter();
+void cs_leave();
 void output();
 int message_ts(char * msg);
+
+void* mutual_exclusion_handler();
+void maekawa_protocol_release();
+void maekawa_protocol_request();
 
 // Global parameters
 int nb_nodes;
@@ -73,6 +86,7 @@ int node_id;
 int port;
 int request_num;
 CS_Time* execution_times;
+int wait_time;
 
 Quorum_Member* quorum;
 int quorum_size;
@@ -227,7 +241,7 @@ int main(int argc, char* argv[])
     // Create mutual exclusion service thread
     pthread_t pid;
     pthread_create(&pid, &attr, mutual_exclusion_handler, NULL);
-
+    wait_time = exponential_rand(inter_request_delay);
     // Application loop
     app();
 
@@ -237,30 +251,79 @@ int main(int argc, char* argv[])
 
 void app()
 {
-    struct timespec current_time, previous_time;
-    clock_gettime(CLOCK_REALTIME, &previous_time);
-    uint64_t delta_ms;
-    struct timespec random_cs_time;
-    int random_delay = exponential_rand(inter_request_delay);
-    int random_exec_time = exponential_rand(cs_execution_time);
-
-    random_cs_time.tv_sec = random_exec_time / 1000;
-    random_cs_time.tv_nsec = (random_exec_time % 1000) * 1000000;
-    while (request_num < num_requests) {
-        clock_gettime(CLOCK_REALTIME, &current_time);
-        delta_ms = (current_time.tv_sec - previous_time.tv_sec) * 1000 +
-            (current_time.tv_nsec - previous_time.tv_nsec) / 1000000;
-
-        if (delta_ms > random_delay) {
-            request_num++;
+   while(1)
+    {
+        if (can_request() && request_num < num_requests)
+        {
             cs_enter();
-            nanosleep(&random_cs_time, NULL);
-            cs_leave();
-            previous_time.tv_sec = current_time.tv_sec;
-            previous_time.tv_nsec = current_time.tv_nsec;
         }
     }
 }
+
+
+
+void cs_enter()
+{
+    // Request CS enter by signaling semaphore
+    if (sem_post(&enter_request) == -1) {
+        printf("Error during signal on mutex.\n");
+        exit(1);
+    } 
+
+    // Wait on mutual exclusion module to grant request
+    if (sem_wait(&request_grant) == -1) {
+        printf("Error during wait on mutex.\n");
+        exit(1);
+    }
+
+    int sec, new_sec;
+    long nsec, new_nsec;
+    struct timespec ts;
+    int time_elapsed = 0; //ms
+    int ms, new_ms;
+
+    clock_gettime(CLOCK_REALTIME, &ts);
+    ts.tv_sec = sec;
+    ts.tv_nsec = nsec;
+    prev_ms = sec * 1000 + nsec / 1000000;
+
+    execution_times[request_num].start_time = prev_ms;
+
+    while (time_elapsed < cs_execution_time)
+    {   
+        clock_gettime(CLOCK_REALTIME, &ts);
+        ts.tv_sec = new_sec;
+        ts.tv_nsec = new_nsec;
+        new_ms = new_sec * 1000 + new_nsec / 1000000;
+
+        time_elapsed += (new_ms - ms);
+        ms = new_ms;
+    }
+    cs_leave();
+
+}
+
+void cs_leave()
+{
+    int sec;
+    long nsec;
+    int ms;
+    struct timespec ts;
+
+    clock_gettime(CLOCK_REALTIME, &ts);
+
+    sec = ts.tv_sec;
+    nsec = ts.tv_nsec;
+    ms = sec * 1000 + nsec / 1000000 ;
+    execution_times[request_num].end_time = ms;
+    request_num++;
+
+    // Signal that application is done executing critical section
+    if (sem_post(&execution_end) == -1) {
+        printf("Error during signal on mutex.\n");
+        exit(1);
+    }
+}  
 
 void* handle_quorum_member(void * arg)
 {
@@ -353,30 +416,6 @@ int handle_message(char* message, size_t length)
     return 0;
 }
 
-void cs_enter() 
-{
-    // Request CS enter by signaling semaphore
-    if (sem_post(&enter_request) == -1) {
-        printf("Error during signal on mutex.\n");
-        exit(1);
-    } 
-
-    // Wait on mutual exclusion module to grant request
-    if (sem_wait(&request_grant) == -1) {
-        printf("Error during wait on mutex.\n");
-        exit(1);
-    }
-}
-
-void cs_leave()
-{
-    // Signal that application is done executing critical section
-    if (sem_post(&execution_end) == -1) {
-        printf("Error during signal on mutex.\n");
-        exit(1);
-    } 
-}
-
 void* mutual_exclusion_handler()
 {
     while (1) {
@@ -439,59 +478,6 @@ void maekawa_protocol_request()
 }
 
 
-void cs-enter()
-{
-    // Request mutex service
-    // Assuming granted...
-    int sec, new_sec;
-    long nsec, new_nsec;
-    struct timespec ts;
-    int time_elapsed = 0; //ms
-
-    clock_gettime(CLOCK_REALTIME, &ts);
-    ts.tv_sec = sec;
-    ts.tv_nsec = nsec;
-    prev_ms = sec * 1000 + nsec / 1000000;
-
-    execution_times[request_num].start_time = prev_ms;
-
-    while (time_elapsed < cs_execution_time)
-    {   
-        clock_gettime(CLOCK_REALTIME, &ts);
-        ts.tv_sec = new_sec;
-        ts.tv_nsec = new_nsec;
-        new_ms = new_sec * 1000 + new_nsec / 1000000;
-
-        time_elapsed += (new_ms - ms);
-        ms = new_ms;
-    }
-    cs-leave();
-
-}
-
-void cs-leave()
-{
-    // Send notification to mutex service...
-    // Does order matter? Should this be after recording time?
-
-
-
-
-
-    int sec;
-    long nsec;
-    int ms;
-    struct timespec ts;
-
-    clock_gettime(CLOCK_REALTIME, &ts);
-
-    sec = ts.tv_sec;
-    nsec = ts.tv_nsec;
-    ms = current_sec * 1000 + current_nsec / 1000000 
-    execution_times[request_num].end_time = ms;
-    request_num++;
-}  
-
 int can_request()
 {
     int current_sec;
@@ -503,15 +489,15 @@ int can_request()
 
     current_sec = ts.tv_sec;
     current_nsec = ts.tv_nsec;
-    current_ms = current_sec * 1000 + current_nsec / 1000000
+    current_ms = current_sec * 1000 + current_nsec / 1000000;
 
 
-    if (current_ms - prev_ms > inter_request_delay)
+    if (current_ms - prev_ms > wait_time)
     {
-        return true;
+        return 1;
     }
     else
-        return false;
+        return 0;
 }
 
 
@@ -549,7 +535,6 @@ char message_type(char * msg)
 
 int message_ts(char *msg)
 {
-    return msg+5;
     int ts; 
     sscanf(msg+5, "%3d", &ts);
     return ts;
@@ -563,7 +548,7 @@ void output()
     int i;
     for (i = 0; i < request_num; i++)
     {
-        fprintf("%d %d\n", execution_times[request_num].start_time, execution_times[request_num].end_time);
+        fprintf(fp, "%d %d\n", execution_times[request_num].start_time, execution_times[request_num].end_time);
     }
 }
 
