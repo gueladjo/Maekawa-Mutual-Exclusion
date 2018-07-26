@@ -54,7 +54,7 @@ int handle_message(char* message, size_t length);
 
 void send_msg(int sockfd, char * buffer, int msglen);
 int receive_message(char * message, int length);
-int merge_timestamps(int * incoming_ts);
+int merge_timestamps(int incoming_ts);
 
 int message_source(char * msg);
 int message_dst(char * msg);
@@ -90,7 +90,7 @@ int wait_time;
 
 Quorum_Member* quorum;
 int quorum_size;
-int lock_holder;
+int lock_holder = -1;
 int lock_received = 0;
 
 int main(int argc, char* argv[])
@@ -378,11 +378,15 @@ int handle_message(char* message, size_t length)
     strcpy(temp, message);
     temp[length] = '\0';
     printf("MSG RCVD: %s LENGTH: %d\n", temp, (int) length);
+    
+    int sender = message_source(message);
+    int sender_ts = message_ts(message);
+    merge_timestamps(sender_ts);
 
     if (message_type(message) == GRANT)
     {
         lock_received++;
-
+        // Check if all locks are received
         if (lock_received == quorum_size) {
             // Signal CS can be executed
             if (sem_post(&wait_grant) == -1) {
@@ -395,10 +399,25 @@ int handle_message(char* message, size_t length)
 
     if (message_type(message) == REQUEST)
     {
+        char msg[20];
+        if (lock_holder == -1) {
+            // Grant lock
+            timestamp++;
+            lock_holder = sender;
+            snprintf(msg, 9, "%02d%02dG%03d", node_id, sender, timestamp);
+            send_msg(quorum[sender].send_socket, msg, 8);
+        }
+
+        // If lock is already held check timestamps
+        else {
+
+        }
+        
     }
 
     if (message_type(message) == RELEASE)
     {
+        lock_holder = -1;
     }
 
     if (message_type(message) == FAILED)
@@ -511,6 +530,16 @@ void send_msg(int sockfd, char * buffer, int msglen)
     {
         bytes_to_send -= send(sockfd, buffer + (msglen - bytes_to_send), msglen, 0);
     }
+}
+
+int merge_timestamps(int incoming_ts)
+{
+    if (incoming_ts > timestamp)
+        timestamp = incoming_ts + 1;
+    else
+        timestamp = timestamp + 1;
+
+    return 0;
 }
 
 // Message accessor functions, for easy reading
