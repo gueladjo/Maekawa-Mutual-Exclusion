@@ -30,30 +30,12 @@ typedef struct Quorum_Member {
     int send_socket;
 } Quorum_Member;
 
-<<<<<<< HEAD
 typedef struct CS_Time
 {
     int start_time;
     int end_time;
 } CS_Time;
 
-=======
-// Semaphore
-sem_t enter_request;
-sem_t request_grant;
-sem_t execution_end;
-sem_t wait_grant;
-
-// Lamport clock
-int timestamp = 0;
-
-void cs_enter();
-void cs_leave();
-
-void* mutual_exclusion_handler(); 
-void maekawa_protocol_release();
-void maekawa_protocol_request();
->>>>>>> origin/moctar
 
 int exponential_rand(int mean);
 
@@ -61,30 +43,19 @@ void* handle_quorum_member(void* arg);
 void parse_buffer(char* buffer, size_t* rcv_len);
 int handle_message(char* message, size_t length);
 
-<<<<<<< HEAD
-char * create_vector_msg(int * vector_clk);
-int * parse_vector(char * char_vector);
-
-void send_msg(int sockfd, char * buffer, int msglen);
-int receive_message(char * message, int length);
-=======
 void send_msg(int sockfd, char * buffer, int msglen);
 int receive_message(char * message, int length);
 int merge_timestamps(int * incoming_ts);
->>>>>>> origin/moctar
 
 int message_source(char * msg);
 int message_dst(char * msg);
 char message_type(char * msg);
-<<<<<<< HEAD
 char * message_payload(char * msg);
 void app();
 void cs-enter();
 void cs-leave();
 void output();
-=======
 int message_ts(char * msg);
->>>>>>> origin/moctar
 
 // Global parameters
 int nb_nodes;
@@ -252,34 +223,36 @@ int main(int argc, char* argv[])
         pthread_create(&tid, &attr, handle_quorum_member, &(quorum[i].receive_socket));
         i++;
     }
-<<<<<<< HEAD
-    app();
-=======
 
     // Create mutual exclusion service thread
     pthread_t pid;
     pthread_create(&pid, &attr, mutual_exclusion_handler, NULL);
 
+    // Application loop
+    app();
+
+    exit(0);
+}
+
+
+void app()
+{
     struct timespec current_time, previous_time;
     clock_gettime(CLOCK_REALTIME, &previous_time);
     uint64_t delta_ms;
-
     struct timespec random_cs_time;
     int random_delay = exponential_rand(inter_request_delay);
     int random_exec_time = exponential_rand(cs_execution_time);
 
     random_cs_time.tv_sec = random_exec_time / 1000;
     random_cs_time.tv_nsec = (random_exec_time % 1000) * 1000000;
-
-    // Application loop
-    int request_generated = 0;
-    while (request_generated < num_requests) {
+    while (request_num < num_requests) {
         clock_gettime(CLOCK_REALTIME, &current_time);
         delta_ms = (current_time.tv_sec - previous_time.tv_sec) * 1000 +
             (current_time.tv_nsec - previous_time.tv_nsec) / 1000000;
 
         if (delta_ms > random_delay) {
-            request_generated++;
+            request_num++;
             cs_enter();
             nanosleep(&random_cs_time, NULL);
             cs_leave();
@@ -287,9 +260,6 @@ int main(int argc, char* argv[])
             previous_time.tv_nsec = current_time.tv_nsec;
         }
     }
-
-    exit(0);
->>>>>>> origin/moctar
 }
 
 void* handle_quorum_member(void * arg)
@@ -468,16 +438,6 @@ void maekawa_protocol_request()
     } 
 }
 
-void app()
-{
-    while(1)
-    {
-        if (can_request() && request_num < num_requests)
-        {
-            cs-enter()
-        }
-    }
-}
 
 void cs-enter()
 {
@@ -589,8 +549,10 @@ char message_type(char * msg)
 
 int message_ts(char *msg)
 {
-<<<<<<< HEAD
     return msg+5;
+    int ts; 
+    sscanf(msg+5, "%3d", &ts);
+    return ts;
 }
 
 void output()
@@ -604,11 +566,7 @@ void output()
         fprintf("%d %d\n", execution_times[request_num].start_time, execution_times[request_num].end_time);
     }
 }
-=======
-    int ts; 
-    sscanf(msg+5, "%3d", &ts);
-    return ts;
-}
+
 
 int exponential_rand(int mean)
 {
@@ -620,4 +578,3 @@ int exponential_rand(int mean)
 
     return ret;
 }
->>>>>>> origin/moctar
