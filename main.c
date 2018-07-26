@@ -65,6 +65,7 @@ void cs_enter();
 void cs_leave();
 void output();
 int message_ts(char * msg);
+int can_request();
 
 void* mutual_exclusion_handler();
 void maekawa_protocol_release();
