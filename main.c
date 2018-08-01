@@ -44,6 +44,7 @@ sem_t wait_grant;
 
 // Lamport clock
 int timestamp = 0;
+int grant_timestamp = 0;
 
 
 int exponential_rand(int mean);
@@ -90,7 +91,9 @@ CS_Time* execution_times;
 int wait_time;
 
 Quorum_Member* quorum;
+Quorum_Member* membership;
 int quorum_size;
+int membership_size = 0;
 int lock_holder = -1;
 int lock_received = 0;
 
@@ -113,8 +116,24 @@ int main(int argc, char* argv[])
     quorum_size = system_config.quorumSize[node_id];
     port = system_config.portNumbers[node_id];
 
+    for (i = 0; i < system_config.nodes_in_system; i++)
+    {
+        if (i != node_id)
+        {
+            for (j = 0; j < system_config.quorumSize[i]; i++)
+            {
+                if (system_config.quorum[i][j] == node_id)
+                {
+                    membership_size++;
+                    break;
+                }
+            }
+        }
+    }
+
     // Set up quorum information
     quorum =  malloc(quorum_size * sizeof(Quorum_Member));
+    membership = malloc(membership_size * sizeof(Quorum_Member));
 
     // List of all start and end times of critical sections for this node
     execution_times = malloc(num_requests * sizeof(CS_Time));
@@ -127,6 +146,36 @@ int main(int argc, char* argv[])
         memmove(quorum[i].hostname, system_config.hostNames[quorum[i].id], 18);
     }
 
+    i = 0;
+    while(i < membership_size)
+    {
+        for (k = 0; k < system_config.nodes_in_system; k++)
+        {
+            if (k != node_id)
+            {
+                for (j = 0; j < system_config.quorumSize[k]; j++)
+                {
+                    if (system_config.quorum[k][j] == node_id)
+                    {
+                        membership[i].id = k;
+                        membership[i].port = system_config.portNumbers[k];
+                        memmove(membership[i].hostname, system_config.hostNames[i], 18);
+                        i++;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    printf("Membership size: %d\nMembership: ", membership_size);
+
+    for(i = 0; i < membership_size; i++)
+    {
+        printf("%d ", membership[i].id);
+    }
+    printf("\n");
+    
     // Initialize mutex
     if (sem_init(&enter_request, 0, 0) == -1) {
         printf("Error during mutex init.\n");
@@ -261,8 +310,6 @@ void app()
     }
 }
 
-
-
 void cs_enter()
 {
     // Request CS enter by signaling semaphore
@@ -375,6 +422,8 @@ void parse_buffer(char* buffer, size_t* rcv_len)
 // Source | Dest | Protocol | Length | Payload
 int handle_message(char* message, size_t length)
 {
+    static int failed_received = 0;
+    static int inquire_received = 0;
     char temp[300];
     strcpy(temp, message);
     temp[length] = '\0';
@@ -405,13 +454,27 @@ int handle_message(char* message, size_t length)
             // Grant lock
             timestamp++;
             lock_holder = sender;
+            grant_timestamp = message_ts(message);
             snprintf(msg, 9, "%02d%02dG%03d", node_id, sender, timestamp);
             send_msg(quorum[sender].send_socket, msg, 8);
         }
 
         // If lock is already held check timestamps
-        else {
+        else 
+        {
+            if (message_ts(message) < grant_timestamp)
+            {
+                timestamp++;
+                snprintf(msg, 9, "%02d%02dF%03d", node_id, lock_holder, timestamp);
+                send_msg(quorum[sender].send_socket, msg, 8);
 
+            }
+            else
+            {
+                timestamp++;
+                snprintf(msg, 9, "%02d%02dF%03d", node_id, sender, timestamp);
+                send_msg(quorum[sender].send_socket, msg, 8);
+            }
         }
         
     }
@@ -423,14 +486,31 @@ int handle_message(char* message, size_t length)
 
     if (message_type(message) == FAILED)
     {
+        if (inquire_received)
+        {
+            maekawa_protocol_release(); // release all or just 1?
+            inquire_received = 0;
+        }
+        else
+        {
+            failed_received = 1;
+        }
     }
 
     if (message_type(message) == INQUIRE)
     {
+        if (failed_received)
+        {
+            maekawa_protocol_release();
+            failed_received = 0;
+        }
+        else
+            inquire_received = 1;
     }
 
     if (message_type(message) == YIELD)
     {
+        lock_holder = -1;
     }
 
     return 0;
@@ -513,9 +593,7 @@ int can_request()
 
 
     if (current_ms - prev_ms > wait_time)
-    {
         return 1;
-    }
     else
         return 0;
 }
