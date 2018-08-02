@@ -56,7 +56,7 @@ int timestamp = 0;
 int grant_timestamp = 0;
 
 // Request queue
-RequestQ* request_queue;
+RequestQ request_queue;
 
 // Parameters
 int failed_received = 0;
@@ -217,8 +217,8 @@ int main(int argc, char* argv[])
     printf("\n");
    
     // Allocate request queue
-    request_queue->q = malloc(sizeof(Request) * nb_nodes);
-    request_queue->size = 0;
+    request_queue.q = malloc(sizeof(Request) * nb_nodes);
+    request_queue.size = 0;
 
     // Initialize mutex
     if (sem_init(&enter_request, 0, 0) == -1) {
@@ -520,7 +520,7 @@ int handle_message(char* message, size_t length)
         // If lock is already held check timestamps
         else 
         {
-            add_request(request_queue, sender, sender_ts);
+            add_request(&request_queue, sender, sender_ts);
             if (sender_ts < grant_timestamp)
             {
                 timestamp++;
@@ -542,10 +542,10 @@ int handle_message(char* message, size_t length)
         lock_held = 0;
 
         // Grant next request
-        if (request_queue->size != 0) {
+        if (request_queue.size != 0) {
             timestamp++;
             lock_held = 1;
-            get_request(request_queue, &lock_holder, &grant_timestamp);
+            get_request(&request_queue, &lock_holder, &grant_timestamp);
             snprintf(msg, 9, "%02d%02dG%03d", node_id, lock_holder, timestamp);
             send_msg(connection_info[lock_holder].send_socket, msg, 8);
         }
@@ -587,7 +587,7 @@ int handle_message(char* message, size_t length)
         if (lock_holder == sender) {
             // grant lock to process in queue
             timestamp++;
-            get_request(request_queue, &lock_holder, &grant_timestamp);
+            get_request(&request_queue, &lock_holder, &grant_timestamp);
             snprintf(msg, 9, "%02d%02dG%03d", node_id, lock_holder, timestamp);
             send_msg(connection_info[lock_holder].send_socket, msg, 8);
         }
