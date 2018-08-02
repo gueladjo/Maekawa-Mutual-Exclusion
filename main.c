@@ -51,6 +51,9 @@ sem_t request_grant;
 sem_t execution_end;
 sem_t wait_grant;
 
+
+struct timespec random_cs_time;
+
 // Lamport clock
 int timestamp = 0;
 int grant_timestamp = 0;
@@ -125,6 +128,11 @@ int main(int argc, char* argv[])
     // Config struct filled when config file parsed
     srand(time(NULL));
 
+    int random_exec_time = exponential_rand(cs_execution_time);
+
+        random_cs_time.tv_sec = random_exec_time / 1000;
+    random_cs_time.tv_nsec = (random_exec_time % 1000) * 1000000;
+
     read_config_file(&system_config, argv[2]);
     display_config(system_config); 
 
@@ -183,6 +191,8 @@ int main(int argc, char* argv[])
         quorum[i].port = system_config.portNumbers[quorum[i].id];
         memmove(quorum[i].hostname, system_config.hostNames[quorum[i].id], 18);*/
     }
+
+    
 
     i = 0;
     while(i < membership_size)
@@ -370,7 +380,6 @@ void app()
 
 void cs_enter()
 {
-    printf("Enter CS");
     // Request CS enter by signaling semaphore
     if (sem_post(&enter_request) == -1) {
         printf("Error during signal on mutex.\n");
@@ -382,6 +391,7 @@ void cs_enter()
         printf("Error during wait on mutex.\n");
         exit(1);
     }
+    printf("Enter CS\n");
 
     int sec, new_sec;
     long nsec, new_nsec;
@@ -396,16 +406,18 @@ void cs_enter()
 
     execution_times[request_num].start_time = prev_ms;
 
-    while (time_elapsed < cs_execution_time)
+
+    nanosleep(&random_cs_time, NULL);
+    /*while (time_elapsed < cs_execution_time)
     {   
         clock_gettime(CLOCK_REALTIME, &ts);
         new_sec = ts.tv_sec - launch_time_s;
         new_nsec = ts.tv_nsec;
         new_ms = new_sec * 1000 + new_nsec / 1000000;
-
         time_elapsed += (new_ms - ms);
         ms = new_ms;
-    }
+        printf("time_elapsed: %d"\n)
+    }*/
     cs_leave();
 
 }
@@ -416,6 +428,7 @@ void cs_leave()
     long nsec;
     int ms;
     struct timespec ts;
+
 
     clock_gettime(CLOCK_REALTIME, &ts);
 
@@ -430,6 +443,8 @@ void cs_leave()
         printf("Error during signal on mutex.\n");
         exit(1);
     }
+    printf("Leave CS\n");
+    
 }  
 
 void* handle_quorum_member(void * arg)
@@ -678,8 +693,6 @@ int can_request()
     current_sec = ts.tv_sec - launch_time_s;
     current_nsec = ts.tv_nsec;
     current_ms = current_sec * 1000 + current_nsec / 1000000;
-
-    printf("current_ms:%ld\n", current_nsec);
 
     if (current_ms - prev_ms > wait_time && request_num < num_requests)
         return 1;
