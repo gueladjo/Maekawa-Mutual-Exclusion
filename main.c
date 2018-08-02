@@ -24,7 +24,6 @@
 typedef struct Node_Info {
     int id;
     int port;
-    int lock_held;
     char hostname[100];
     int receive_socket;
     int send_socket;
@@ -332,7 +331,7 @@ int main(int argc, char* argv[])
     addrlen = sizeof(sin2);
 
     i = 0;
-    while (i < quorum_size) {
+    while (i < nb_nodes) {
         if ((connection_info[i].receive_socket = accept(s, (struct sockaddr *) &sin2, (socklen_t*)&addrlen)) == -1) {
             printf("Error on accept call.\n");
             exit(1);
@@ -515,7 +514,7 @@ int handle_message(char* message, size_t length)
             lock_holder = sender;
             grant_timestamp = sender_ts;
             snprintf(msg, 9, "%02d%02dG%03d", node_id, lock_holder, timestamp);
-            send_msg(connection_info[membership[lock_holder]].send_socket, msg, 8);
+            send_msg(connection_info[lock_holder].send_socket, msg, 8);
         }
 
         // If lock is already held check timestamps
@@ -526,13 +525,13 @@ int handle_message(char* message, size_t length)
             {
                 timestamp++;
                 snprintf(msg, 9, "%02d%02dI%03d", node_id, lock_holder, timestamp);
-                send_msg(connection_info[membership[lock_holder]].send_socket, msg, 8);
+                send_msg(connection_info[lock_holder].send_socket, msg, 8);
             }
             else
             {
                 timestamp++;
                 snprintf(msg, 9, "%02d%02dF%03d", node_id, sender, timestamp);
-                send_msg(connection_info[membership[sender]].send_socket, msg, 8);
+                send_msg(connection_info[sender].send_socket, msg, 8);
             }
         }
     }
@@ -548,7 +547,7 @@ int handle_message(char* message, size_t length)
             lock_held = 1;
             get_request(request_queue, &lock_holder, &grant_timestamp);
             snprintf(msg, 9, "%02d%02dG%03d", node_id, lock_holder, timestamp);
-            send_msg(connection_info[membership[lock_holder]].send_socket, msg, 8);
+            send_msg(connection_info[lock_holder].send_socket, msg, 8);
         }
     }
 
@@ -564,7 +563,7 @@ int handle_message(char* message, size_t length)
                 lock_received--;
                 inquire_received[k] = 0;
                 snprintf(msg, 9, "%02d%02dY%03d", node_id, k, timestamp);
-                send_msg(connection_info[quorum[k]].send_socket, msg, 8);
+                send_msg(connection_info[k].send_socket, msg, 8);
             }
         }
     }
@@ -576,7 +575,7 @@ int handle_message(char* message, size_t length)
             timestamp++;
             lock_received--;
             snprintf(msg, 9, "%02d%02dY%03d", node_id, sender, timestamp);
-            send_msg(connection_info[quorum[sender]].send_socket, msg, 8);
+            send_msg(connection_info[sender].send_socket, msg, 8);
         }
         else if (!executing_cs) {
             inquire_received[sender] = 1;
@@ -590,7 +589,7 @@ int handle_message(char* message, size_t length)
             timestamp++;
             get_request(request_queue, &lock_holder, &grant_timestamp);
             snprintf(msg, 9, "%02d%02dG%03d", node_id, lock_holder, timestamp);
-            send_msg(connection_info[membership[lock_holder]].send_socket, msg, 8);
+            send_msg(connection_info[lock_holder].send_socket, msg, 8);
         }
         else {
             printf("ERROR YIELD RECEIVED FROM WRONG PROCESS!\n");
