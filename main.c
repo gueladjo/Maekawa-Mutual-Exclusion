@@ -370,7 +370,6 @@ void app()
 
 void cs_enter()
 {
-    printf("Enter CS");
     // Request CS enter by signaling semaphore
     if (sem_post(&enter_request) == -1) {
         printf("Error during signal on mutex.\n");
@@ -382,6 +381,8 @@ void cs_enter()
         printf("Error during wait on mutex.\n");
         exit(1);
     }
+
+    printf("Enter CS\n");
 
     int sec, new_sec;
     long nsec, new_nsec;
@@ -403,6 +404,7 @@ void cs_enter()
         new_nsec = ts.tv_nsec;
         new_ms = new_sec * 1000 + new_nsec / 1000000;
 
+        printf("time elapsed: %d", time_elapsed);
         time_elapsed += (new_ms - ms);
         ms = new_ms;
     }
@@ -430,6 +432,7 @@ void cs_leave()
         printf("Error during signal on mutex.\n");
         exit(1);
     }
+    printf("CS leave\n");
 }  
 
 void* handle_quorum_member(void * arg)
@@ -678,8 +681,6 @@ int can_request()
     current_sec = ts.tv_sec - launch_time_s;
     current_nsec = ts.tv_nsec;
     current_ms = current_sec * 1000 + current_nsec / 1000000;
-
-    printf("current_ms:%ld\n", current_nsec);
 
     if (current_ms - prev_ms > wait_time && request_num < num_requests)
         return 1;
