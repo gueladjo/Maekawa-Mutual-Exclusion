@@ -116,6 +116,7 @@ Quorum_Member* membership;
 int quorum_size;
 int membership_size = 0;
 int lock_holder = -1;
+int lock_held = 0;
 int lock_received = 0;
 
 int main(int argc, char* argv[])
@@ -133,6 +134,7 @@ int main(int argc, char* argv[])
     num_requests = system_config.num_requests;
 
     sscanf(argv[1], "%d", &node_id);
+    lock_holder = node_id;
 
     quorum_size = system_config.quorumSize[node_id];
     port = system_config.portNumbers[node_id];
@@ -320,7 +322,6 @@ int main(int argc, char* argv[])
         i++;
     }
 
-
     struct timespec ts;
     clock_gettime(CLOCK_REALTIME, &ts);
 
@@ -488,9 +489,10 @@ int handle_message(char* message, size_t length)
 
     if (message_type(message) == REQUEST)
     {
-        if (lock_holder == -1) {
+        if (!lock_held || ((lock_holder == node_id) && (sender == node_id))) {
             // Grant lock
             timestamp++;
+            lock_held = 1;
             lock_holder = sender;
             grant_timestamp = sender_ts;
             snprintf(msg, 9, "%02d%02dG%03d", node_id, lock_holder, timestamp);
@@ -518,11 +520,13 @@ int handle_message(char* message, size_t length)
 
     if (message_type(message) == RELEASE)
     {
-        lock_holder = -1;
+        lock_holder = node_id;
+        lock_held = 0;
 
         // Grant next request
         if (request_queue->size != 0) {
             timestamp++;
+            lock_held = 1;
             get_request(request_queue, &lock_holder, &grant_timestamp);
             snprintf(msg, 9, "%02d%02dG%03d", node_id, lock_holder, timestamp);
             send_msg(membership[lock_holder].send_socket, msg, 8);
