@@ -36,6 +36,16 @@ typedef struct CS_Time
     int end_time;
 } CS_Time;
 
+typedef struct Request {
+    int id;
+    int ts;
+} Request;
+
+typedef struct RequestQ { 
+    Request* q;
+    int size;
+} RequestQ;
+
 // Semaphore
 sem_t enter_request;
 sem_t request_grant;
@@ -46,6 +56,13 @@ sem_t wait_grant;
 int timestamp = 0;
 int grant_timestamp = 0;
 
+// Request queue
+RequestQ* request_queue;
+
+// Parameters
+int failed_received = 0;
+int* inquire_received;
+int executing_cs = 0;
 
 int exponential_rand(int mean);
 
@@ -71,6 +88,9 @@ int can_request();
 void* mutual_exclusion_handler();
 void maekawa_protocol_release();
 void maekawa_protocol_request();
+
+int add_request(RequestQ* q, int id, int ts);
+int get_request(RequestQ* q, int* id, int* ts);
 
 // Global parameters
 int nb_nodes;
@@ -136,6 +156,10 @@ int main(int argc, char* argv[])
     quorum =  malloc(quorum_size * sizeof(Quorum_Member));
     membership = malloc(membership_size * sizeof(Quorum_Member));
 
+    // Allocate inquire received array
+    inquire_received = malloc(nb_nodes * sizeof(int));
+    memset(inquire_received, 0, sizeof(int) * nb_nodes);
+
     // List of all start and end times of critical sections for this node
     execution_times = malloc(num_requests * sizeof(CS_Time));
 
@@ -176,7 +200,11 @@ int main(int argc, char* argv[])
         printf("%d ", membership[i].id);
     }
     printf("\n");
-    
+   
+    // Allocate request queue
+    request_queue->q = malloc(sizeof(Request) * nb_nodes);
+    request_queue->size = 0;
+
     // Initialize mutex
     if (sem_init(&enter_request, 0, 0) == -1) {
         printf("Error during mutex init.\n");
@@ -434,8 +462,6 @@ void parse_buffer(char* buffer, size_t* rcv_len)
 // Source | Dest | Protocol | Length | Payload
 int handle_message(char* message, size_t length)
 {
-    static int failed_received = 0;
-    static int inquire_received = 0;
     char temp[300];
     strcpy(temp, message);
     temp[length] = '\0';
@@ -444,6 +470,8 @@ int handle_message(char* message, size_t length)
     int sender = message_source(message);
     int sender_ts = message_ts(message);
     merge_timestamps(sender_ts);
+
+    char msg[20];
 
     if (message_type(message) == GRANT)
     {
@@ -455,74 +483,96 @@ int handle_message(char* message, size_t length)
                 printf("Error during signal on mutex.\n");
                 exit(1);
             }
-
         }
     }
 
     if (message_type(message) == REQUEST)
     {
-        char msg[20];
         if (lock_holder == -1) {
             // Grant lock
             timestamp++;
             lock_holder = sender;
-            grant_timestamp = message_ts(message);
-            snprintf(msg, 9, "%02d%02dG%03d", node_id, sender, timestamp);
-            send_msg(quorum[sender].send_socket, msg, 8);
+            grant_timestamp = sender_ts;
+            snprintf(msg, 9, "%02d%02dG%03d", node_id, lock_holder, timestamp);
+            send_msg(membership[lock_holder].send_socket, msg, 8);
         }
 
         // If lock is already held check timestamps
         else 
         {
-            if (message_ts(message) < grant_timestamp)
+            add_request(request_queue, sender, sender_ts);
+            if (sender_ts < grant_timestamp)
             {
                 timestamp++;
-                snprintf(msg, 9, "%02d%02dF%03d", node_id, lock_holder, timestamp);
-                send_msg(quorum[sender].send_socket, msg, 8);
-
+                snprintf(msg, 9, "%02d%02dI%03d", node_id, lock_holder, timestamp);
+                send_msg(membership[lock_holder].send_socket, msg, 8);
             }
             else
             {
                 timestamp++;
                 snprintf(msg, 9, "%02d%02dF%03d", node_id, sender, timestamp);
-                send_msg(quorum[sender].send_socket, msg, 8);
+                send_msg(membership[sender].send_socket, msg, 8);
             }
         }
-        
     }
 
     if (message_type(message) == RELEASE)
     {
         lock_holder = -1;
+
+        // Grant next request
+        if (request_queue->size != 0) {
+            timestamp++;
+            get_request(request_queue, &lock_holder, &grant_timestamp);
+            snprintf(msg, 9, "%02d%02dG%03d", node_id, lock_holder, timestamp);
+            send_msg(membership[lock_holder].send_socket, msg, 8);
+        }
     }
 
     if (message_type(message) == FAILED)
     {
-        if (inquire_received)
-        {
-            maekawa_protocol_release(); // release all or just 1?
-            inquire_received = 0;
-        }
-        else
-        {
-            failed_received = 1;
+        failed_received = 1;
+
+        // Process defered inquire messages
+        int k = 0;
+        for (k = 0; k < nb_nodes; k++) {
+            if (inquire_received[k]) {
+                timestamp++;
+                lock_received--;
+                inquire_received[k] = 0;
+                snprintf(msg, 9, "%02d%02dY%03d", node_id, k, timestamp);
+                send_msg(quorum[k].send_socket, msg, 8);
+            }
         }
     }
 
     if (message_type(message) == INQUIRE)
     {
-        if (failed_received)
+        if (failed_received && !executing_cs)
         {
-            maekawa_protocol_release();
-            failed_received = 0;
+            timestamp++;
+            lock_received--;
+            snprintf(msg, 9, "%02d%02dY%03d", node_id, sender, timestamp);
+            send_msg(quorum[sender].send_socket, msg, 8);
         }
-        else
-            inquire_received = 1;
+        else if (!executing_cs) {
+            inquire_received[sender] = 1;
+        }
     }
 
     if (message_type(message) == YIELD)
     {
-        lock_holder = -1;
+        if (lock_holder == sender) {
+            // grant lock to process in queue
+            timestamp++;
+            get_request(request_queue, &lock_holder, &grant_timestamp);
+            snprintf(msg, 9, "%02d%02dG%03d", node_id, lock_holder, timestamp);
+            send_msg(membership[lock_holder].send_socket, msg, 8);
+        }
+        else {
+            printf("ERROR YIELD RECEIVED FROM WRONG PROCESS!\n");
+            exit(1);
+        }
     }
 
     return 0;
@@ -543,7 +593,8 @@ void* mutual_exclusion_handler()
         if (sem_post(&request_grant) == -1) {
             printf("Error during signal on mutex.\n");
             exit(1);
-        } 
+        }
+        executing_cs = 1; 
 
         // Wait for application to finish executing CS
         if (sem_wait(&execution_end) == -1) {
@@ -575,7 +626,10 @@ void maekawa_protocol_request()
 
     lock_received = 0;
     // Send request message to all quorum members
+    failed_received = 0;
+    memset(inquire_received, 0, sizeof(int) * nb_nodes);
     timestamp++;
+
     for (i = 0; i < quorum_size; i++)
     {
         snprintf(msg, 9, "%02d%02dR%03d", node_id, quorum[i].id, timestamp);
@@ -603,7 +657,7 @@ int can_request()
     current_nsec = ts.tv_nsec;
     current_ms = current_sec * 1000 + current_nsec / 1000000;
 
-    printf("current_ms:%d\n", current_nsec);
+    printf("current_ms:%ld\n", current_nsec);
 
     if (current_ms - prev_ms > wait_time && request_num < num_requests)
         return 1;
@@ -684,3 +738,38 @@ int exponential_rand(int mean)
 
     return ret;
 }
+
+int add_request(RequestQ* rq, int id, int ts)
+{
+    rq->q[rq->size].id = id;
+    rq->q[rq->size].ts = ts;
+    rq->size = rq->size + 1;
+
+    return 0;
+}
+
+int get_request(RequestQ* rq, int* id, int* ts)
+{
+    int i = 0;
+    int len = rq->size;
+    int min_id = 0;
+    int min_ts = rq->q[0].ts;
+
+    // Find minimum timestamp request
+    for (i = 1; i < len; i++) {
+        if (rq->q[i].ts < min_ts) {
+            min_ts = rq->q[i].ts;
+            min_id = i;
+        }
+    }
+
+    // Extract minimum request timestamp
+    *id = rq->q[min_id].id;
+    *ts = rq->q[min_id].ts;
+    rq->size = rq->size - 1;
+    
+    memmove(rq->q + min_id, rq->q + 1 + min_id, sizeof(Request) * (rq->size - min_id));
+
+    return 0;
+}
+
