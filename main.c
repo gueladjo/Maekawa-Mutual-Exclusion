@@ -79,7 +79,8 @@ int cs_execution_time;
 int num_requests;
 
 //Timing Variables
-int prev_ms;
+int prev_ms = 0;
+int launch_time_s;
 
 config system_config; 
 
@@ -120,7 +121,7 @@ int main(int argc, char* argv[])
     {
         if (i != node_id)
         {
-            for (j = 0; j < system_config.quorumSize[i]; i++)
+            for (j = 0; j < system_config.quorumSize[i]; j++)
             {
                 if (system_config.quorum[i][j] == node_id)
                 {
@@ -245,32 +246,35 @@ int main(int argc, char* argv[])
 
     // Create client sockets to neighbors of the node
     for (j = 0; j < quorum_size; j++) {
-        // Create TCP socket
-        if ((quorum[j].send_socket = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
-            printf("Error creating socket\n");
-            exit(1); 
-        }
+       // if (quorum[j].id != node_id)
+        //{
+            // Create TCP socket
+            if ((quorum[j].send_socket = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
+                printf("Error creating socket\n");
+                exit(1); 
+            }
 
-        // Get host info
-        if ((h = gethostbyname(quorum[j].hostname)) == 0) {
-            printf("Error on gethostbyname\n");
-            exit(1);
-        }
+            // Get host info
+            if ((h = gethostbyname(quorum[j].hostname)) == 0) {
+                printf("Error on gethostbyname\n");
+                exit(1);
+            }
 
-        // Fill in socket address structure with host info
-        memset(&pin, 0, sizeof(pin));
-        pin.sin_family = AF_INET;
-        pin.sin_addr.s_addr = ((struct in_addr *)(h->h_addr))->s_addr;
-        pin.sin_port = htons(quorum[j].port);
+            // Fill in socket address structure with host info
+            memset(&pin, 0, sizeof(pin));
+            pin.sin_family = AF_INET;
+            pin.sin_addr.s_addr = ((struct in_addr *)(h->h_addr))->s_addr;
+            pin.sin_port = htons(quorum[j].port);
 
-        // Connect to port on neighbor
-        int connect_return = connect(quorum[j].send_socket, (struct sockaddr *) &pin, sizeof(pin));
-        printf("Node %d trying to connect to node %d.\n", node_id, quorum[j].id);
-        while (connect_return == -1) {
-            connect_return = connect(quorum[j].send_socket, (struct sockaddr *) &pin, sizeof(pin));
-            sleep(1);
-        }
-        printf("Node %d connected to neighbor %d.\n", node_id, quorum[j].id);
+            // Connect to port on neighbor
+            int connect_return = connect(quorum[j].send_socket, (struct sockaddr *) &pin, sizeof(pin));
+            printf("Node %d trying to connect to node %d.\n", node_id, quorum[j].id);
+            while (connect_return == -1) {
+                connect_return = connect(quorum[j].send_socket, (struct sockaddr *) &pin, sizeof(pin));
+                sleep(1);
+            }
+            printf("Node %d connected to quorum member %d.\n", node_id, quorum[j].id);
+        //}
     }
 
     // Create thread for receiving each neighbor messages
@@ -288,11 +292,18 @@ int main(int argc, char* argv[])
         i++;
     }
 
+
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+
+    launch_time_s = ts.tv_sec;
+
     // Create mutual exclusion service thread
     pthread_t pid;
     pthread_create(&pid, &attr, mutual_exclusion_handler, NULL);
     wait_time = exponential_rand(inter_request_delay);
     // Application loop
+    printf("Enter App\n");
     app();
 
     exit(0);
@@ -303,7 +314,7 @@ void app()
 {
    while(1)
     {
-        if (can_request() && request_num < num_requests)
+        if (can_request())
         {
             cs_enter();
         }
@@ -312,6 +323,7 @@ void app()
 
 void cs_enter()
 {
+    printf("Enter CS");
     // Request CS enter by signaling semaphore
     if (sem_post(&enter_request) == -1) {
         printf("Error during signal on mutex.\n");
@@ -331,8 +343,8 @@ void cs_enter()
     int ms, new_ms;
 
     clock_gettime(CLOCK_REALTIME, &ts);
-    ts.tv_sec = sec;
-    ts.tv_nsec = nsec;
+    sec = ts.tv_sec - launch_time_s;
+    nsec = ts.tv_nsec;
     prev_ms = sec * 1000 + nsec / 1000000;
 
     execution_times[request_num].start_time = prev_ms;
@@ -340,8 +352,8 @@ void cs_enter()
     while (time_elapsed < cs_execution_time)
     {   
         clock_gettime(CLOCK_REALTIME, &ts);
-        ts.tv_sec = new_sec;
-        ts.tv_nsec = new_nsec;
+        new_sec = ts.tv_sec - launch_time_s;
+        new_nsec = ts.tv_nsec;
         new_ms = new_sec * 1000 + new_nsec / 1000000;
 
         time_elapsed += (new_ms - ms);
@@ -360,7 +372,7 @@ void cs_leave()
 
     clock_gettime(CLOCK_REALTIME, &ts);
 
-    sec = ts.tv_sec;
+    sec = ts.tv_sec - launch_time_s;
     nsec = ts.tv_nsec;
     ms = sec * 1000 + nsec / 1000000 ;
     execution_times[request_num].end_time = ms;
@@ -582,17 +594,18 @@ int can_request()
 {
     int current_sec;
     long current_nsec;
-    int current_ms;
+    long current_ms;
     struct timespec ts;
 
     clock_gettime(CLOCK_REALTIME, &ts);
 
-    current_sec = ts.tv_sec;
+    current_sec = ts.tv_sec - launch_time_s;
     current_nsec = ts.tv_nsec;
     current_ms = current_sec * 1000 + current_nsec / 1000000;
 
+    printf("current_ms:%d\n", current_nsec);
 
-    if (current_ms - prev_ms > wait_time)
+    if (current_ms - prev_ms > wait_time && request_num < num_requests)
         return 1;
     else
         return 0;
