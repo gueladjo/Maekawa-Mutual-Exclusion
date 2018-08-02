@@ -21,14 +21,14 @@
 #define INQUIRE 'I'
 #define YIELD 'Y'
 
-typedef struct Quorum_Member {
+typedef struct Node_Info {
     int id;
     int port;
     int lock_held;
     char hostname[100];
     int receive_socket;
     int send_socket;
-} Quorum_Member;
+} Node_Info;
 
 typedef struct CS_Time
 {
@@ -111,8 +111,9 @@ int request_num;
 CS_Time* execution_times;
 int wait_time;
 
-Quorum_Member* quorum;
-Quorum_Member* membership;
+Node_Info* connection_info;
+int* quorum;
+int* membership;
 int quorum_size;
 int membership_size = 0;
 int lock_holder = -1;
@@ -155,8 +156,9 @@ int main(int argc, char* argv[])
     }
 
     // Set up quorum information
-    quorum =  malloc(quorum_size * sizeof(Quorum_Member));
-    membership = malloc(membership_size * sizeof(Quorum_Member));
+    quorum =  malloc(quorum_size * sizeof(int));
+    membership = malloc(membership_size * sizeof(int));
+    connection_info = malloc(nb_nodes * sizeof(Node_Info));
 
     // Allocate inquire received array
     inquire_received = malloc(nb_nodes * sizeof(int));
@@ -165,12 +167,22 @@ int main(int argc, char* argv[])
     // List of all start and end times of critical sections for this node
     execution_times = malloc(num_requests * sizeof(CS_Time));
 
+    for (i = 0; i < nb_nodes; i++)
+    {
+        connection_info[i].id = system_config.nodeIDs[i];
+        connection_info[i].port = system_config.portNumbers[i];
+        memmove(connection_info[i].hostname, system_config.hostNames[i], 18);
+    }
+
+
     // allocate quorum array
     for (i = 0; i < quorum_size; i++)
     {
+        quorum[i] = system_config.quorum[node_id][i];
+        /*
         quorum[i].id = system_config.quorum[node_id][i];
         quorum[i].port = system_config.portNumbers[quorum[i].id];
-        memmove(quorum[i].hostname, system_config.hostNames[quorum[i].id], 18);
+        memmove(quorum[i].hostname, system_config.hostNames[quorum[i].id], 18);*/
     }
 
     i = 0;
@@ -184,9 +196,11 @@ int main(int argc, char* argv[])
                 {
                     if (system_config.quorum[k][j] == node_id)
                     {
+                        membership[i] = k;
+                        /*
                         membership[i].id = k;
                         membership[i].port = system_config.portNumbers[k];
-                        memmove(membership[i].hostname, system_config.hostNames[i], 18);
+                        memmove(membership[i].hostname, system_config.hostNames[i], 18);*/
                         i++;
                         break;
                     }
@@ -199,7 +213,7 @@ int main(int argc, char* argv[])
 
     for(i = 0; i < membership_size; i++)
     {
-        printf("%d ", membership[i].id);
+        printf("%d ", membership[i]);
     }
     printf("\n");
    
@@ -269,23 +283,23 @@ int main(int argc, char* argv[])
     }
 
     // Set queuesize of pending connections
-    if (listen(s, quorum_size + 10) == -1) {
+    if (listen(s, nb_nodes + 10) == -1) {
         printf("Error on listen call\n");
         exit(1);
     }
 
     // Create client sockets to neighbors of the node
-    for (j = 0; j < quorum_size; j++) {
+    for (j = 0; j < nb_nodes; j++) {
        // if (quorum[j].id != node_id)
         //{
             // Create TCP socket
-            if ((quorum[j].send_socket = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
+            if ((connection_info[j].send_socket = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
                 printf("Error creating socket\n");
                 exit(1); 
             }
 
             // Get host info
-            if ((h = gethostbyname(quorum[j].hostname)) == 0) {
+            if ((h = gethostbyname(connection_info[j].hostname)) == 0) {
                 printf("Error on gethostbyname\n");
                 exit(1);
             }
@@ -294,18 +308,23 @@ int main(int argc, char* argv[])
             memset(&pin, 0, sizeof(pin));
             pin.sin_family = AF_INET;
             pin.sin_addr.s_addr = ((struct in_addr *)(h->h_addr))->s_addr;
-            pin.sin_port = htons(quorum[j].port);
+            pin.sin_port = htons(connection_info[j].port);
 
             // Connect to port on neighbor
-            int connect_return = connect(quorum[j].send_socket, (struct sockaddr *) &pin, sizeof(pin));
-            printf("Node %d trying to connect to node %d.\n", node_id, quorum[j].id);
+            int connect_return = connect(connection_info[j].send_socket, (struct sockaddr *) &pin, sizeof(pin));
+            printf("Node %d trying to connect to node %d.\n", node_id, connection_info[j].id);
             while (connect_return == -1) {
-                connect_return = connect(quorum[j].send_socket, (struct sockaddr *) &pin, sizeof(pin));
+                connect_return = connect(connection_info[j].send_socket, (struct sockaddr *) &pin, sizeof(pin));
                 sleep(1);
             }
-            printf("Node %d connected to quorum member %d.\n", node_id, quorum[j].id);
-        //}
-    }
+            printf("Node %d connected to node %d.\n", node_id, connection_info[j].id);
+
+
+
+            }
+
+
+            
 
     // Create thread for receiving each neighbor messages
     pthread_attr_init(&attr);
@@ -314,11 +333,11 @@ int main(int argc, char* argv[])
 
     i = 0;
     while (i < quorum_size) {
-        if ((quorum[i].receive_socket = accept(s, (struct sockaddr *) &sin2, (socklen_t*)&addrlen)) == -1) {
+        if ((connection_info[i].receive_socket = accept(s, (struct sockaddr *) &sin2, (socklen_t*)&addrlen)) == -1) {
             printf("Error on accept call.\n");
             exit(1);
         }
-        pthread_create(&tid, &attr, handle_quorum_member, &(quorum[i].receive_socket));
+        pthread_create(&tid, &attr, handle_quorum_member, &(connection_info[i].receive_socket));
         i++;
     }
 
@@ -496,7 +515,7 @@ int handle_message(char* message, size_t length)
             lock_holder = sender;
             grant_timestamp = sender_ts;
             snprintf(msg, 9, "%02d%02dG%03d", node_id, lock_holder, timestamp);
-            send_msg(membership[lock_holder].send_socket, msg, 8);
+            send_msg(connection_info[membership[lock_holder]].send_socket, msg, 8);
         }
 
         // If lock is already held check timestamps
@@ -507,13 +526,13 @@ int handle_message(char* message, size_t length)
             {
                 timestamp++;
                 snprintf(msg, 9, "%02d%02dI%03d", node_id, lock_holder, timestamp);
-                send_msg(membership[lock_holder].send_socket, msg, 8);
+                send_msg(connection_info[membership[lock_holder]].send_socket, msg, 8);
             }
             else
             {
                 timestamp++;
                 snprintf(msg, 9, "%02d%02dF%03d", node_id, sender, timestamp);
-                send_msg(membership[sender].send_socket, msg, 8);
+                send_msg(connection_info[membership[sender]].send_socket, msg, 8);
             }
         }
     }
@@ -529,7 +548,7 @@ int handle_message(char* message, size_t length)
             lock_held = 1;
             get_request(request_queue, &lock_holder, &grant_timestamp);
             snprintf(msg, 9, "%02d%02dG%03d", node_id, lock_holder, timestamp);
-            send_msg(membership[lock_holder].send_socket, msg, 8);
+            send_msg(connection_info[membership[lock_holder]].send_socket, msg, 8);
         }
     }
 
@@ -545,7 +564,7 @@ int handle_message(char* message, size_t length)
                 lock_received--;
                 inquire_received[k] = 0;
                 snprintf(msg, 9, "%02d%02dY%03d", node_id, k, timestamp);
-                send_msg(quorum[k].send_socket, msg, 8);
+                send_msg(connection_info[quorum[k]].send_socket, msg, 8);
             }
         }
     }
@@ -557,7 +576,7 @@ int handle_message(char* message, size_t length)
             timestamp++;
             lock_received--;
             snprintf(msg, 9, "%02d%02dY%03d", node_id, sender, timestamp);
-            send_msg(quorum[sender].send_socket, msg, 8);
+            send_msg(connection_info[quorum[sender]].send_socket, msg, 8);
         }
         else if (!executing_cs) {
             inquire_received[sender] = 1;
@@ -571,7 +590,7 @@ int handle_message(char* message, size_t length)
             timestamp++;
             get_request(request_queue, &lock_holder, &grant_timestamp);
             snprintf(msg, 9, "%02d%02dG%03d", node_id, lock_holder, timestamp);
-            send_msg(membership[lock_holder].send_socket, msg, 8);
+            send_msg(connection_info[membership[lock_holder]].send_socket, msg, 8);
         }
         else {
             printf("ERROR YIELD RECEIVED FROM WRONG PROCESS!\n");
@@ -618,8 +637,8 @@ void maekawa_protocol_release()
     timestamp++;
     for (i = 0; i < quorum_size; i++)
     {
-        snprintf(msg, 9, "%02d%02dL%03d", node_id, quorum[i].id, timestamp);
-        send_msg(quorum[i].send_socket, msg, 8);
+        snprintf(msg, 9, "%02d%02dL%03d", node_id, quorum[i], timestamp);
+        send_msg(connection_info[quorum[i]].send_socket, msg, 8);
     }
 }
 
@@ -636,8 +655,8 @@ void maekawa_protocol_request()
 
     for (i = 0; i < quorum_size; i++)
     {
-        snprintf(msg, 9, "%02d%02dR%03d", node_id, quorum[i].id, timestamp);
-        send_msg(quorum[i].send_socket, msg, 8);
+        snprintf(msg, 9, "%02d%02dR%03d", node_id, quorum[i], timestamp);
+        send_msg(connection_info[quorum[i]].send_socket, msg, 8);
     }
 
     // Wait until all GRANT messages are received
@@ -776,4 +795,3 @@ int get_request(RequestQ* rq, int* id, int* ts)
 
     return 0;
 }
-
