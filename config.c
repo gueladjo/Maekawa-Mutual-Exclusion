@@ -387,8 +387,14 @@ void printArray(int * array, int length)
 
 // returns index of value in array
 int find(int value, int * array, int length)
-{
-    return value;
+{   
+    int i;
+    for (i = 0; i < length; i++)
+    {
+        if (array[i] == value)
+            return i;
+    }
+    return -1;
 }
 
 

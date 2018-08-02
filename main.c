@@ -24,7 +24,6 @@
 typedef struct Node_Info {
     int id;
     int port;
-    int lock_held;
     char hostname[100];
     int receive_socket;
     int send_socket;
@@ -52,12 +51,15 @@ sem_t request_grant;
 sem_t execution_end;
 sem_t wait_grant;
 
+
+struct timespec random_cs_time;
+
 // Lamport clock
 int timestamp = 0;
 int grant_timestamp = 0;
 
 // Request queue
-RequestQ* request_queue;
+RequestQ request_queue;
 
 // Parameters
 int failed_received = 0;
@@ -126,6 +128,11 @@ int main(int argc, char* argv[])
     // Config struct filled when config file parsed
     srand(time(NULL));
 
+    int random_exec_time = exponential_rand(cs_execution_time);
+
+        random_cs_time.tv_sec = random_exec_time / 1000;
+    random_cs_time.tv_nsec = (random_exec_time % 1000) * 1000000;
+
     read_config_file(&system_config, argv[2]);
     display_config(system_config); 
 
@@ -185,6 +192,8 @@ int main(int argc, char* argv[])
         memmove(quorum[i].hostname, system_config.hostNames[quorum[i].id], 18);*/
     }
 
+    
+
     i = 0;
     while(i < membership_size)
     {
@@ -218,8 +227,8 @@ int main(int argc, char* argv[])
     printf("\n");
    
     // Allocate request queue
-    request_queue->q = malloc(sizeof(Request) * nb_nodes);
-    request_queue->size = 0;
+    request_queue.q = malloc(sizeof(Request) * nb_nodes);
+    request_queue.size = 0;
 
     // Initialize mutex
     if (sem_init(&enter_request, 0, 0) == -1) {
@@ -332,7 +341,7 @@ int main(int argc, char* argv[])
     addrlen = sizeof(sin2);
 
     i = 0;
-    while (i < quorum_size) {
+    while (i < nb_nodes) {
         if ((connection_info[i].receive_socket = accept(s, (struct sockaddr *) &sin2, (socklen_t*)&addrlen)) == -1) {
             printf("Error on accept call.\n");
             exit(1);
@@ -371,7 +380,6 @@ void app()
 
 void cs_enter()
 {
-    printf("Enter CS");
     // Request CS enter by signaling semaphore
     if (sem_post(&enter_request) == -1) {
         printf("Error during signal on mutex.\n");
@@ -383,6 +391,7 @@ void cs_enter()
         printf("Error during wait on mutex.\n");
         exit(1);
     }
+    printf("Enter CS\n");
 
     int sec, new_sec;
     long nsec, new_nsec;
@@ -397,16 +406,18 @@ void cs_enter()
 
     execution_times[request_num].start_time = prev_ms;
 
-    while (time_elapsed < cs_execution_time)
+
+    nanosleep(&random_cs_time, NULL);
+    /*while (time_elapsed < cs_execution_time)
     {   
         clock_gettime(CLOCK_REALTIME, &ts);
         new_sec = ts.tv_sec - launch_time_s;
         new_nsec = ts.tv_nsec;
         new_ms = new_sec * 1000 + new_nsec / 1000000;
-
         time_elapsed += (new_ms - ms);
         ms = new_ms;
-    }
+        printf("time_elapsed: %d"\n)
+    }*/
     cs_leave();
 
 }
@@ -417,6 +428,7 @@ void cs_leave()
     long nsec;
     int ms;
     struct timespec ts;
+
 
     clock_gettime(CLOCK_REALTIME, &ts);
 
@@ -431,6 +443,8 @@ void cs_leave()
         printf("Error during signal on mutex.\n");
         exit(1);
     }
+    printf("Leave CS\n");
+    
 }  
 
 void* handle_quorum_member(void * arg)
@@ -515,24 +529,24 @@ int handle_message(char* message, size_t length)
             lock_holder = sender;
             grant_timestamp = sender_ts;
             snprintf(msg, 9, "%02d%02dG%03d", node_id, lock_holder, timestamp);
-            send_msg(connection_info[membership[lock_holder]].send_socket, msg, 8);
+            send_msg(connection_info[lock_holder].send_socket, msg, 8);
         }
 
         // If lock is already held check timestamps
         else 
         {
-            add_request(request_queue, sender, sender_ts);
+            add_request(&request_queue, sender, sender_ts);
             if (sender_ts < grant_timestamp)
             {
                 timestamp++;
                 snprintf(msg, 9, "%02d%02dI%03d", node_id, lock_holder, timestamp);
-                send_msg(connection_info[membership[lock_holder]].send_socket, msg, 8);
+                send_msg(connection_info[lock_holder].send_socket, msg, 8);
             }
             else
             {
                 timestamp++;
                 snprintf(msg, 9, "%02d%02dF%03d", node_id, sender, timestamp);
-                send_msg(connection_info[membership[sender]].send_socket, msg, 8);
+                send_msg(connection_info[sender].send_socket, msg, 8);
             }
         }
     }
@@ -543,12 +557,12 @@ int handle_message(char* message, size_t length)
         lock_held = 0;
 
         // Grant next request
-        if (request_queue->size != 0) {
+        if (request_queue.size != 0) {
             timestamp++;
             lock_held = 1;
-            get_request(request_queue, &lock_holder, &grant_timestamp);
+            get_request(&request_queue, &lock_holder, &grant_timestamp);
             snprintf(msg, 9, "%02d%02dG%03d", node_id, lock_holder, timestamp);
-            send_msg(connection_info[membership[lock_holder]].send_socket, msg, 8);
+            send_msg(connection_info[lock_holder].send_socket, msg, 8);
         }
     }
 
@@ -564,7 +578,7 @@ int handle_message(char* message, size_t length)
                 lock_received--;
                 inquire_received[k] = 0;
                 snprintf(msg, 9, "%02d%02dY%03d", node_id, k, timestamp);
-                send_msg(connection_info[quorum[k]].send_socket, msg, 8);
+                send_msg(connection_info[k].send_socket, msg, 8);
             }
         }
     }
@@ -576,7 +590,7 @@ int handle_message(char* message, size_t length)
             timestamp++;
             lock_received--;
             snprintf(msg, 9, "%02d%02dY%03d", node_id, sender, timestamp);
-            send_msg(connection_info[quorum[sender]].send_socket, msg, 8);
+            send_msg(connection_info[sender].send_socket, msg, 8);
         }
         else if (!executing_cs) {
             inquire_received[sender] = 1;
@@ -588,9 +602,9 @@ int handle_message(char* message, size_t length)
         if (lock_holder == sender) {
             // grant lock to process in queue
             timestamp++;
-            get_request(request_queue, &lock_holder, &grant_timestamp);
+            get_request(&request_queue, &lock_holder, &grant_timestamp);
             snprintf(msg, 9, "%02d%02dG%03d", node_id, lock_holder, timestamp);
-            send_msg(connection_info[membership[lock_holder]].send_socket, msg, 8);
+            send_msg(connection_info[lock_holder].send_socket, msg, 8);
         }
         else {
             printf("ERROR YIELD RECEIVED FROM WRONG PROCESS!\n");
@@ -679,8 +693,6 @@ int can_request()
     current_sec = ts.tv_sec - launch_time_s;
     current_nsec = ts.tv_nsec;
     current_ms = current_sec * 1000 + current_nsec / 1000000;
-
-    printf("current_ms:%ld\n", current_nsec);
 
     if (current_ms - prev_ms > wait_time && request_num < num_requests)
         return 1;
