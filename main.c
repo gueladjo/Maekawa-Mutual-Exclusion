@@ -20,6 +20,7 @@
 #define FAILED 'F'
 #define INQUIRE 'I'
 #define YIELD 'Y'
+#define HALT 'H'
 
 typedef struct Node_Info {
     int id;
@@ -68,6 +69,7 @@ RequestQ request_queue;
 int failed_received = 0;
 int* inquire_received;
 int executing_cs = 0;
+int halt_received = 0;
 
 int exponential_rand(int mean);
 
@@ -763,6 +765,35 @@ int handle_message(char* message, size_t length)
         }
     }
 
+    else if (message_type(message) == HALT) {
+
+        if (sem_wait(&mutex_ts) == -1) {
+            printf("Error during signal on mutex.\n");
+            exit(1);
+        } 
+
+        int i;
+        if (!halt_received) {
+            halt_received = 1;
+            for (i = 0; i < quorum_size; i++) {
+                if (quorum[i] != sender) {
+                    char msg[30];
+                    snprintf(msg, 15, "%02d%02dH%09d", node_id, quorum[i], timestamp);
+                    send_msg(connection_info[quorum[i]].send_socket, msg, 14);
+                }
+            }
+            output();
+            exit(0);
+        }
+
+        if (sem_post(&mutex_ts) == -1) {
+            printf("Error during signal on mutex.\n");
+            exit(1);
+        } 
+
+    }
+
+
     return 0;
 }
 
@@ -885,8 +916,12 @@ int can_request()
     current_ms = current_sec * 1000 + current_nsec / 1000000;
 
     if (request_num >= num_requests) {
-        printf("END\n");
-        exit(0);
+        int i = 0;
+        for (i = 0; i < quorum_size; i++) {
+            char msg[30];
+            snprintf(msg, 15, "%02d%02dH%09d", node_id, quorum[i], timestamp);
+            send_msg(connection_info[quorum[i]].send_socket, msg, 14);
+        }
     }
 
     if (current_ms - prev_ms > wait_time && request_num < num_requests)
@@ -955,6 +990,7 @@ void output()
     {
         fprintf(fp, "%d %d\n", execution_times[request_num].start_time, execution_times[request_num].end_time);
     }
+    printf("OUTPUT\n");
 }
 
 
