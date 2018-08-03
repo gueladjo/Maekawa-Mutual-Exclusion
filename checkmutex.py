@@ -1,4 +1,5 @@
 import numpy as np
+import sys
 
 def compareExecutionTimes(start1_s, start1_ns, end1_s, end1_ns, start2_s, start2_ns, end2_s, end2_ns):
     print("Comparing %d %d %d %d | %d %d %d %d" % (start1_s, start1_ns, end1_s, end1_ns, start2_s, start2_ns, end2_s, end2_ns))
@@ -15,29 +16,54 @@ def compareExecutionTimes(start1_s, start1_ns, end1_s, end1_ns, start2_s, start2
             return False
         else:
             return True
-
-        
-
-
     if(start2 < start1 + diff1 and start2 > start1):
         return False
     else:
         return True
 
-f = open("config.txt", 'r')
+def findMinMax(executionTimes, numRequests, numNodes):
+    minStart = executionTimes[0][0][0] + (executionTimes[0][0][1] / 1000000000)
+    maxEnd = 0 
+    for i in range(0, numNodes):
+        testMin = executionTimes[i][0][0] + (executionTimes[i][0][1] / 100000000)
+        testMax = executionTimes[i][numRequests-1][2] + (executionTimes[i][numRequests-1][3] / 1000000000)
+        if (testMin < minStart):
+            minStart = testMin
+        if (testMax > maxEnd):
+            maxEnd = testMax
+    return minStart, maxEnd
+
+def sumExecutionTimes(executionTimes, numRequests, numNodes):
+    accumulator = 0
+    for n in range(0, numNodes):
+        for i in range(0, numRequests):
+            start = executionTimes[n][i][0] + (executionTimes[n][i][1]/1000000000)
+            end = executionTimes[n][i][2] + (executionTimes[n][i][3]/1000000000)
+            accumulator += end - start
+    return accumulator
+
+print(sys.argv[1])
+f = open(sys.argv[1], 'r')
 if (f.closed):
     print("File not opened")
-    exti(1)
+    exit(1)
+
 s = f.readline()
+print(s)
 s = s.split(" ")
 numNodes = int(s[0])
 numRequests = int(s[3])
 f.close()
 
 executionTimes = np.zeros((numNodes, numRequests, 4))
+responseTime = np.zeros(numNodes)
+messageComplexity = np.zeros(numNodes)
 
 for i in range(0, numNodes):
     f = open("node%doutput" % (i))
+    s = f.readline().split(" ")
+    responseTime[i] = float(s[0])
+    messageComplexity[i] = float(s[1])
     for j in (range(0, numRequests)):
         s = f.readline().split(" ")
         s = map(str.strip, s)
@@ -57,3 +83,11 @@ for i in range(0, numNodes):
                     exit()
 
 print("Success")
+
+start, end = findMinMax(executionTimes, numRequests, numNodes)
+execTime = sumExecutionTimes(executionTimes, numRequests, numNodes)
+throughput = float(execTime/(end - start))
+print("Throughput: %f" % (throughput))
+
+print("Message Complexity: %f" % (np.average(messageComplexity)))
+print("Response time: %f" % (np.average(responseTime)))
