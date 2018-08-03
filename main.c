@@ -996,8 +996,8 @@ int message_ts(char *msg)
 void output()
 {
     printf("OUTPUT\n");
-    char fileName[15];
-    snprintf(fileName, 15, "node%doutput", node_id);
+    char fileName[40];
+    snprintf(fileName, 15 , "node%doutput", node_id);
     FILE * fp = fopen(fileName, "w");
     int i;
     
