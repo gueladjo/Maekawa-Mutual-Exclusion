@@ -51,6 +51,9 @@ sem_t request_grant;
 sem_t execution_end;
 sem_t wait_grant;
 
+//Mutex
+sem_t mutex_ts;
+sem_t mutex_l;
 
 struct timespec random_cs_time;
 
@@ -119,8 +122,9 @@ int* membership;
 int quorum_size;
 int membership_size = 0;
 int lock_holder = -1;
-int lock_held = 0;
+int lock_held = 1;
 int lock_received = 0;
+int* lock_senders;
 
 int main(int argc, char* argv[])
 {
@@ -170,6 +174,8 @@ int main(int argc, char* argv[])
     // Allocate inquire received array
     inquire_received = malloc(nb_nodes * sizeof(int));
     memset(inquire_received, 0, sizeof(int) * nb_nodes);
+    lock_senders = malloc(nb_nodes * sizeof(int));
+    memset(lock_senders, 0, sizeof(int) * nb_nodes);
 
     // List of all start and end times of critical sections for this node
     execution_times = malloc(num_requests * sizeof(CS_Time));
@@ -228,6 +234,7 @@ int main(int argc, char* argv[])
    
     // Allocate request queue
     request_queue.q = malloc(sizeof(Request) * nb_nodes);
+
     request_queue.size = 0;
 
     // Initialize mutex
@@ -250,6 +257,18 @@ int main(int argc, char* argv[])
         printf("Error during mutex init.\n");
         exit(1);
     }
+
+    if (sem_init(&mutex_ts, 0, 1) == -1) {
+        printf("Error during mutex init.\n");
+        exit(1);
+    }
+    
+    if (sem_init(&mutex_l, 0, 1) == -1) {
+        printf("Error during mutex init.\n");
+        exit(1);
+    }
+
+
 
     // Client sockets information
     struct hostent* h;
@@ -393,8 +412,6 @@ void cs_enter()
     }
     printf("Enter CS\n");
 
-    printf("Enter CS\n");
-
     int sec, new_sec;
     long nsec, new_nsec;
     struct timespec ts;
@@ -476,7 +493,7 @@ void* handle_quorum_member(void * arg)
 void parse_buffer(char* buffer, size_t* rcv_len)
 {
     // Check if we have enough byte to read message length
-    int message_len = 3;
+    int message_len = 9;
     while (*rcv_len > 4 ) {
         // Check if we received a whole message
 
@@ -505,12 +522,31 @@ int handle_message(char* message, size_t length)
     
     int sender = message_source(message);
     int sender_ts = message_ts(message);
+
+    if (sem_wait(&mutex_ts) == -1) {
+        printf("Error during wait on mutex.\n");
+        exit(1);
+    }
+
     merge_timestamps(sender_ts);
 
-    char msg[20];
+    if (sem_post(&mutex_ts) == -1) {
+        printf("Error during signal on mutex.\n");
+        exit(1);
+    } 
+
+
+    char msg[50];
 
     if (message_type(message) == GRANT)
     {
+    
+        if (sem_wait(&mutex_l) == -1) {
+            printf("Error during wait on mutex.\n");
+            exit(1);
+        }
+        
+        lock_senders[sender] = 1;
         lock_received++;
         // Check if all locks are received
         if (lock_received == quorum_size) {
@@ -520,56 +556,114 @@ int handle_message(char* message, size_t length)
                 exit(1);
             }
         }
+
+        if (sem_post(&mutex_l) == -1) {
+            printf("Error during signal on mutex.\n");
+            exit(1);
+        } 
     }
 
     if (message_type(message) == REQUEST)
     {
-        if (!lock_held || ((lock_holder == node_id) && (sender == node_id))) {
-            // Grant lock
-            timestamp++;
-            lock_held = 1;
-            lock_holder = sender;
-            grant_timestamp = sender_ts;
-            snprintf(msg, 9, "%02d%02dG%03d", node_id, lock_holder, timestamp);
-            send_msg(connection_info[lock_holder].send_socket, msg, 8);
+
+        if (sem_wait(&mutex_l) == -1) {
+            printf("Error during wait on mutex.\n");
+            exit(1);
         }
 
-        // If lock is already held check timestamps
+        if (sem_wait(&mutex_ts) == -1) {
+            printf("Error during wait on mutex.\n");
+            exit(1);
+        }
+
+
+        if (lock_held) {
+            // Grant lock
+            timestamp++;
+            lock_held = 0;
+            lock_holder = sender;
+            grant_timestamp = sender_ts;
+            snprintf(msg, 15, "%02d%02dG%09d", node_id, lock_holder, timestamp);
+            send_msg(connection_info[lock_holder].send_socket, msg, 14);
+        }
+
+        // If lock is not already held check timestamps
         else 
         {
             add_request(&request_queue, sender, sender_ts);
-            if (sender_ts < grant_timestamp)
+            if ((sender_ts < grant_timestamp) || ((sender_ts == grant_timestamp) && (sender < lock_holder)))
             {
                 timestamp++;
-                snprintf(msg, 9, "%02d%02dI%03d", node_id, lock_holder, timestamp);
-                send_msg(connection_info[lock_holder].send_socket, msg, 8);
+                snprintf(msg, 15, "%02d%02dI%09d", node_id, lock_holder, timestamp);
+                send_msg(connection_info[lock_holder].send_socket, msg, 14);
             }
             else
             {
                 timestamp++;
-                snprintf(msg, 9, "%02d%02dF%03d", node_id, sender, timestamp);
-                send_msg(connection_info[sender].send_socket, msg, 8);
+                snprintf(msg, 15, "%02d%02dF%09d", node_id, sender, timestamp);
+                send_msg(connection_info[sender].send_socket, msg, 14);
             }
         }
+
+        if (sem_post(&mutex_ts) == -1) {
+            printf("Error during signal on mutex.\n");
+            exit(1);
+        } 
+
+        if (sem_post(&mutex_l) == -1) {
+            printf("Error during signal on mutex.\n");
+            exit(1);
+        } 
+
     }
 
     if (message_type(message) == RELEASE)
     {
+        if (sem_wait(&mutex_l) == -1) {
+            printf("Error during wait on mutex.\n");
+            exit(1);
+        }
+
+        if (sem_wait(&mutex_ts) == -1) {
+            printf("Error during wait on mutex.\n");
+            exit(1);
+        }
+
         lock_holder = node_id;
-        lock_held = 0;
+        lock_held = 1;
 
         // Grant next request
         if (request_queue.size != 0) {
             timestamp++;
-            lock_held = 1;
+            lock_held = 0;
             get_request(&request_queue, &lock_holder, &grant_timestamp);
-            snprintf(msg, 9, "%02d%02dG%03d", node_id, lock_holder, timestamp);
-            send_msg(connection_info[lock_holder].send_socket, msg, 8);
+            snprintf(msg, 15, "%02d%02dG%09d", node_id, lock_holder, timestamp);
+            send_msg(connection_info[lock_holder].send_socket, msg, 14);
         }
+
+        if (sem_post(&mutex_ts) == -1) {
+            printf("Error during signal on mutex.\n");
+            exit(1);
+        } 
+
+        if (sem_post(&mutex_l) == -1) {
+            printf("Error during signal on mutex.\n");
+            exit(1);
+        } 
     }
 
     if (message_type(message) == FAILED)
     {
+        if (sem_wait(&mutex_l) == -1) {
+            printf("Error during wait on mutex.\n");
+            exit(1);
+        }
+
+        if (sem_wait(&mutex_ts) == -1) {
+            printf("Error during wait on mutex.\n");
+            exit(1);
+        }
+
         failed_received = 1;
 
         // Process defered inquire messages
@@ -578,38 +672,93 @@ int handle_message(char* message, size_t length)
             if (inquire_received[k]) {
                 timestamp++;
                 lock_received--;
+                lock_senders[k] = 0;
                 inquire_received[k] = 0;
-                snprintf(msg, 9, "%02d%02dY%03d", node_id, k, timestamp);
-                send_msg(connection_info[k].send_socket, msg, 8);
+                snprintf(msg, 15, "%02d%02dY%09d", node_id, k, timestamp);
+                send_msg(connection_info[k].send_socket, msg, 14);
             }
         }
+
+        if (sem_post(&mutex_ts) == -1) {
+            printf("Error during signal on mutex.\n");
+            exit(1);
+        } 
+
+        if (sem_post(&mutex_l) == -1) {
+            printf("Error during signal on mutex.\n");
+            exit(1);
+        } 
     }
 
-    if (message_type(message) == INQUIRE)
+    if ((message_type(message) == INQUIRE) && (lock_senders[sender] == 1))
     {
+        if (sem_wait(&mutex_l) == -1) {
+            printf("Error during wait on mutex.\n");
+            exit(1);
+        }
+
+        if (sem_wait(&mutex_ts) == -1) {
+            printf("Error during wait on mutex.\n");
+            exit(1);
+        }
+
         if (failed_received && !executing_cs)
         {
             timestamp++;
             lock_received--;
-            snprintf(msg, 9, "%02d%02dY%03d", node_id, sender, timestamp);
-            send_msg(connection_info[sender].send_socket, msg, 8);
+            lock_senders[sender] = 0;
+            int a, b;
+            //add_request(&request_queue, node_id, timestamp);
+            snprintf(msg, 15, "%02d%02dY%09d", node_id, sender, timestamp);
+            send_msg(connection_info[sender].send_socket, msg, 14);
         }
         else if (!executing_cs) {
             inquire_received[sender] = 1;
         }
+
+        if (sem_post(&mutex_ts) == -1) {
+            printf("Error during signal on mutex.\n");
+            exit(1);
+        } 
+
+        if (sem_post(&mutex_l) == -1) {
+            printf("Error during signal on mutex.\n");
+            exit(1);
+        } 
     }
 
     if (message_type(message) == YIELD)
     {
+        if (sem_wait(&mutex_l) == -1) {
+            printf("Error during wait on mutex.\n");
+            exit(1);
+        }
+
+        if (sem_wait(&mutex_ts) == -1) {
+            printf("Error during wait on mutex.\n");
+            exit(1);
+        }
+
+        add_request(&request_queue, sender, grant_timestamp);
         if (lock_holder == sender) {
             // grant lock to process in queue
             timestamp++;
             get_request(&request_queue, &lock_holder, &grant_timestamp);
-            snprintf(msg, 9, "%02d%02dG%03d", node_id, lock_holder, timestamp);
-            send_msg(connection_info[lock_holder].send_socket, msg, 8);
+            snprintf(msg, 15, "%02d%02dG%09d", node_id, lock_holder, timestamp);
+            send_msg(connection_info[lock_holder].send_socket, msg, 14);
         }
         else {
             printf("ERROR YIELD RECEIVED FROM WRONG PROCESS!\n");
+            exit(1);
+        }
+
+        if (sem_post(&mutex_ts) == -1) {
+            printf("Error during signal on mutex.\n");
+            exit(1);
+        } 
+
+        if (sem_post(&mutex_l) == -1) {
+            printf("Error during signal on mutex.\n");
             exit(1);
         }
     }
@@ -640,6 +789,7 @@ void* mutual_exclusion_handler()
             printf("Error during wait on mutex.\n");
             exit(1);
         }
+        executing_cs = 0;
         maekawa_protocol_release();
     }    
 } 
@@ -650,12 +800,26 @@ void maekawa_protocol_release()
     char msg[50];
 
     // Send release message to all quorum members
+    if (sem_wait(&mutex_ts) == -1) {
+        printf("Error during wait on mutex.\n");
+        exit(1);
+    }
+
+
     timestamp++;
+    int ts = timestamp;
     for (i = 0; i < quorum_size; i++)
     {
-        snprintf(msg, 9, "%02d%02dL%03d", node_id, quorum[i], timestamp);
-        send_msg(connection_info[quorum[i]].send_socket, msg, 8);
+        lock_senders[quorum[i]] = 0;
+        snprintf(msg, 15, "%02d%02dL%09d", node_id, quorum[i], ts);
+        send_msg(connection_info[quorum[i]].send_socket, msg, 14);
     }
+
+    if (sem_post(&mutex_ts) == -1) {
+        printf("Error during wait on mutex.\n");
+        exit(1);
+    }
+
 }
 
 void maekawa_protocol_request()
@@ -663,17 +827,41 @@ void maekawa_protocol_request()
     int i;
     char msg[50];
 
+    if (sem_wait(&mutex_l) == -1) {
+        printf("Error during wait on mutex.\n");
+        exit(1);
+    }
+
+    if (sem_wait(&mutex_ts) == -1) {
+        printf("Error during wait on mutex.\n");
+        exit(1);
+    }
+
     lock_received = 0;
     // Send request message to all quorum members
     failed_received = 0;
     memset(inquire_received, 0, sizeof(int) * nb_nodes);
     timestamp++;
+    int ts = timestamp;
 
     for (i = 0; i < quorum_size; i++)
     {
-        snprintf(msg, 9, "%02d%02dR%03d", node_id, quorum[i], timestamp);
-        send_msg(connection_info[quorum[i]].send_socket, msg, 8);
+        snprintf(msg, 15, "%02d%02dR%09d", node_id, quorum[i], ts);
+        send_msg(connection_info[quorum[i]].send_socket, msg, 14);
     }
+
+
+
+    if (sem_post(&mutex_l) == -1) {
+        printf("Error during wait on mutex.\n");
+        exit(1);
+    }
+
+    if (sem_post(&mutex_ts) == -1) {
+        printf("Error during wait on mutex.\n");
+        exit(1);
+    }
+
 
     // Wait until all GRANT messages are received
     if (sem_wait(&wait_grant) == -1) {
@@ -695,6 +883,11 @@ int can_request()
     current_sec = ts.tv_sec - launch_time_s;
     current_nsec = ts.tv_nsec;
     current_ms = current_sec * 1000 + current_nsec / 1000000;
+
+    if (request_num >= num_requests) {
+        printf("END\n");
+        exit(0);
+    }
 
     if (current_ms - prev_ms > wait_time && request_num < num_requests)
         return 1;
@@ -748,7 +941,7 @@ char message_type(char * msg)
 int message_ts(char *msg)
 {
     int ts; 
-    sscanf(msg+5, "%3d", &ts);
+    sscanf(msg+5, "%9d", &ts);
     return ts;
 }
 
@@ -778,9 +971,22 @@ int exponential_rand(int mean)
 
 int add_request(RequestQ* rq, int id, int ts)
 {
-    rq->q[rq->size].id = id;
-    rq->q[rq->size].ts = ts;
-    rq->size = rq->size + 1;
+    int i = 0;
+    int len = rq->size;
+    int found = 0;
+
+    for (i = 0; i < len; i++) {
+        if (rq->q[i].id == id) {
+            rq->q[i].ts = ts;
+            found = 1;
+        }
+    }
+
+    if (found == 0) {
+        rq->q[rq->size].id = id;
+        rq->q[rq->size].ts = ts;
+        rq->size = rq->size + 1;
+    }
 
     return 0;
 }
@@ -798,11 +1004,15 @@ int get_request(RequestQ* rq, int* id, int* ts)
             min_ts = rq->q[i].ts;
             min_id = i;
         }
+        else if ((rq->q[i].ts == min_ts) && (rq->q[i].id < rq->q[min_id].id)) {
+            min_ts = rq->q[i].ts;
+            min_id = i;
+        }
     }
 
     // Extract minimum request timestamp
     *id = rq->q[min_id].id;
-    *ts = rq->q[min_id].ts;
+    *ts = min_ts;
     rq->size = rq->size - 1;
     
     memmove(rq->q + min_id, rq->q + 1 + min_id, sizeof(Request) * (rq->size - min_id));
