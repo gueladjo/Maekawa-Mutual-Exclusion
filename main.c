@@ -32,8 +32,10 @@ typedef struct Node_Info {
 
 typedef struct CS_Time
 {
-    int start_time;
-    int end_time;
+    int start_time_s;
+    int start_time_ns;
+    int end_time_s;
+    int end_time_ns;
 } CS_Time;
 
 typedef struct Request {
@@ -133,11 +135,6 @@ int main(int argc, char* argv[])
     int i, j, k;
     // Config struct filled when config file parsed
     srand(time(NULL));
-
-    int random_exec_time = exponential_rand(cs_execution_time);
-
-        random_cs_time.tv_sec = random_exec_time / 1000;
-    random_cs_time.tv_nsec = (random_exec_time % 1000) * 1000000;
 
     read_config_file(&system_config, argv[2]);
     display_config(system_config); 
@@ -396,6 +393,7 @@ void app()
         ret = can_request();
         if (ret == 1)
         {
+            wait_time = exponential_rand(inter_request_delay);
             cs_enter();
         }
         else if (ret == 2) {
@@ -432,23 +430,17 @@ void cs_enter()
     nsec = ts.tv_nsec;
     prev_ms = sec * 1000 + nsec / 1000000;
 
-    execution_times[request_num].start_time = prev_ms;
+    execution_times[request_num].start_time_s = ts.tv_sec;
+    execution_times[request_num].start_time_ns = ts.tv_nsec;
 
+    int random_exec_time = exponential_rand(cs_execution_time);
+
+        random_cs_time.tv_sec = random_exec_time / 1000;
+    random_cs_time.tv_nsec = (random_exec_time % 1000) * 1000000;
 
     nanosleep(&random_cs_time, NULL);
-    /*while (time_elapsed < cs_execution_time)
-    {   
-        clock_gettime(CLOCK_REALTIME, &ts);
-        new_sec = ts.tv_sec - launch_time_s;
-        new_nsec = ts.tv_nsec;
-        new_ms = new_sec * 1000 + new_nsec / 1000000;
-        printf("time elapsed: %d", time_elapsed);
-        time_elapsed += (new_ms - ms);
-        ms = new_ms;
-        printf("time_elapsed: %d"\n)
-    }*/
-    cs_leave();
 
+    cs_leave();
 }
 
 void cs_leave()
@@ -464,7 +456,8 @@ void cs_leave()
     sec = ts.tv_sec - launch_time_s;
     nsec = ts.tv_nsec;
     ms = sec * 1000 + nsec / 1000000 ;
-    execution_times[request_num].end_time = ms;
+    execution_times[request_num].end_time_s = ts.tv_sec;
+    execution_times[request_num].end_time_ns = ts.tv_nsec;
     request_num++;
 
     // Signal that application is done executing critical section
@@ -996,7 +989,7 @@ void output()
     int i;
     for (i = 0; i < request_num; i++)
     {
-        fprintf(fp, "%d %d\n", execution_times[i].start_time, execution_times[i].end_time);
+        fprintf(fp, "%d %d %d %d\n", execution_times[i].start_time_s, execution_times[i].start_time_ns, execution_times[i].end_time_s, execution_times[i].end_time_ns);
     }
     fclose(fp);
     printf("OUTPUT END\n");
