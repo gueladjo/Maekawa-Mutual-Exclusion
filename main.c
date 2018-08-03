@@ -390,11 +390,18 @@ int main(int argc, char* argv[])
 
 void app()
 {
+   int ret = 0;
    while(1)
-    {
-        if (can_request())
+   {
+        ret = can_request();
+        if (ret == 1)
         {
             cs_enter();
+        }
+        else if (ret == 2) {
+            printf("END\n");
+            output();
+            while(1) {};
         }
     }
 }
@@ -777,9 +784,9 @@ int handle_message(char* message, size_t length)
             halt_received = 1;
             for (i = 0; i < quorum_size; i++) {
                 if (quorum[i] != sender) {
-                    char msg[30];
-                    snprintf(msg, 15, "%02d%02dH%09d", node_id, quorum[i], timestamp);
-                    send_msg(connection_info[quorum[i]].send_socket, msg, 14);
+                    char buf[30];
+                    snprintf(buf, 15, "%02d%02dH%09d", node_id, quorum[i], timestamp);
+                    send_msg(connection_info[quorum[i]].send_socket, buf, 14);
                 }
             }
             output();
@@ -836,7 +843,6 @@ void maekawa_protocol_release()
         exit(1);
     }
 
-
     timestamp++;
     int ts = timestamp;
     for (i = 0; i < quorum_size; i++)
@@ -845,6 +851,8 @@ void maekawa_protocol_release()
         snprintf(msg, 15, "%02d%02dL%09d", node_id, quorum[i], ts);
         send_msg(connection_info[quorum[i]].send_socket, msg, 14);
     }
+    lock_received = 0;
+    failed_received = 0;
 
     if (sem_post(&mutex_ts) == -1) {
         printf("Error during wait on mutex.\n");
@@ -881,8 +889,6 @@ void maekawa_protocol_request()
         send_msg(connection_info[quorum[i]].send_socket, msg, 14);
     }
 
-
-
     if (sem_post(&mutex_l) == -1) {
         printf("Error during wait on mutex.\n");
         exit(1);
@@ -916,13 +922,14 @@ int can_request()
     current_ms = current_sec * 1000 + current_nsec / 1000000;
 
     if (request_num >= num_requests) {
-        int i = 0;
+        return 2;
+        /*int i = 0;
         for (i = 0; i < quorum_size; i++) {
             char msg[30];
             snprintf(msg, 15, "%02d%02dH%09d", node_id, quorum[i], timestamp);
             send_msg(connection_info[quorum[i]].send_socket, msg, 14);
-        }
-    }
+        } */
+    } 
 
     if (current_ms - prev_ms > wait_time && request_num < num_requests)
         return 1;
@@ -982,15 +989,17 @@ int message_ts(char *msg)
 
 void output()
 {
+    printf("OUTPUT\n");
     char fileName[15];
     snprintf(fileName, 15, "node%doutput", node_id);
     FILE * fp = fopen(fileName, "w");
     int i;
     for (i = 0; i < request_num; i++)
     {
-        fprintf(fp, "%d %d\n", execution_times[request_num].start_time, execution_times[request_num].end_time);
+        fprintf(fp, "%d %d\n", execution_times[i].start_time, execution_times[i].end_time);
     }
-    printf("OUTPUT\n");
+    fclose(fp);
+    printf("OUTPUT END\n");
 }
 
 
