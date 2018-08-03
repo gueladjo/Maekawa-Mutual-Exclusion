@@ -58,6 +58,10 @@ sem_t wait_grant;
 sem_t mutex_ts;
 sem_t mutex_l;
 
+// Average response time
+int response_time = 0;
+int messages_sent = 0;
+
 struct timespec random_cs_time;
 
 // Lamport clock
@@ -805,6 +809,8 @@ void* mutual_exclusion_handler()
             printf("Error during wait on mutex.\n");
             exit(1);
         }
+        struct timespec req;
+        clock_gettime(CLOCK_REALTIME, &req);
 
         maekawa_protocol_request();
     
@@ -820,6 +826,12 @@ void* mutual_exclusion_handler()
             printf("Error during wait on mutex.\n");
             exit(1);
         }
+
+        struct timespec rel;
+        clock_gettime(CLOCK_REALTIME, &rel);
+
+        response_time = response_time + (rel.tv_sec-req.tv_sec) * 1000 + (rel.tv_nsec-req.tv_nsec) / 1000000;
+
         executing_cs = 0;
         maekawa_protocol_release();
     }    
@@ -941,6 +953,7 @@ void send_msg(int sockfd, char * buffer, int msglen)
     {
         bytes_to_send -= send(sockfd, buffer + (msglen - bytes_to_send), msglen, 0);
     }
+    messages_sent++;
 }
 
 int merge_timestamps(int incoming_ts)
@@ -987,6 +1000,12 @@ void output()
     snprintf(fileName, 15, "node%doutput", node_id);
     FILE * fp = fopen(fileName, "w");
     int i;
+    
+    double resp_time = (double) response_time / (double) request_num;
+    double msg_sent = (double) messages_sent / (double) request_num;
+
+    fprintf(fp, "%f %f\n", resp_time, msg_sent);
+
     for (i = 0; i < request_num; i++)
     {
         fprintf(fp, "%d %d %d %d\n", execution_times[i].start_time_s, execution_times[i].start_time_ns, execution_times[i].end_time_s, execution_times[i].end_time_ns);
